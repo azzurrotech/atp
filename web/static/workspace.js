@@ -10,15 +10,15 @@
 
 import { CONFIG } from './config.js';
 import { toast, showSpinner, hideSpinner } from './utils.js';
-import { authState } from './auth.js';
+import { login,logout, authState } from './auth.js';
 import { encryptData, decryptData } from './crypto.js';
-import { scheduleSync } from './sync.js';
+import { scheduleSync, downloadEncryptedContext, pushCurrentState } from './sync.js';
 import { debounce } from './utils.js';
 
 /* ---------------------------------------------------------
    Global UI state (exported for other modules)
 --------------------------------------------------------- */
-export const uiState = {
+const uiState = {
     library: [],                     // Form‑library templates
     articleSeq: 0,                   // Incremental ID for <article>
     fieldValueMap: loadFieldValues(),// Cached map { "articleId|fieldName": "value" }
@@ -42,7 +42,7 @@ const debouncedSaveFieldValues = debounce(map => {
 }, 300);
 
 /* Persist a single field value (called on every input event) */
-export function persistFieldValue(articleId, fieldName, value) {
+function persistFieldValue(articleId, fieldName, value) {
     const key = `${articleId}|${fieldName}`;
     uiState.fieldValueMap[key] = value;
     debouncedSaveFieldValues(uiState.fieldValueMap);
@@ -62,7 +62,7 @@ function saveLibrary(lib) {
 /* ---------------------------------------------------------
    Render the list of saved templates (library UI)
 --------------------------------------------------------- */
-export function renderLibraryList() {
+function renderLibraryList() {
     const ul = document.getElementById('templateList');
     ul.innerHTML = '';
     uiState.library.forEach(tpl => {
@@ -80,7 +80,7 @@ export function renderLibraryList() {
 /* ---------------------------------------------------------
    Add a new input row to the library form
 --------------------------------------------------------- */
-export function addInputRow(container, type = 'text', label = '', name = '') {
+function addInputRow(container, type = 'text', label = '', name = '') {
     const row = document.createElement('div');
     row.className = 'input-row';
 
@@ -117,7 +117,7 @@ export function addInputRow(container, type = 'text', label = '', name = '') {
 /* ---------------------------------------------------------
    Initialise the Library UI (called once on page load)
 --------------------------------------------------------- */
-export function initLibraryUI() {
+function initLibraryUI() {
     // Load persisted templates
     uiState.library = loadLibrary();
     renderLibraryList();
@@ -152,7 +152,7 @@ export function initLibraryUI() {
 /* ---------------------------------------------------------
    Create an <article> (form instance) – includes ARIA labels
 --------------------------------------------------------- */
-export function createArticleNode(tpl, parentArticle = null) {
+function createArticleNode(tpl, parentArticle = null) {
     const article = document.createElement('article');
     const id = ++uiState.articleSeq;
     article.dataset.id = id;
@@ -250,14 +250,14 @@ export function createArticleNode(tpl, parentArticle = null) {
 }
 
 /* Public helper used by the library UI */
-export function addArticleFromTemplate(tpl, parentArticle = null) {
+function addArticleFromTemplate(tpl, parentArticle = null) {
     createArticleNode(tpl, parentArticle);
 }
 
 /* ---------------------------------------------------------
    Keyword‑based ad generation (simple keyword mapping)
 --------------------------------------------------------- */
-export function generateAdsFromMain() {
+function generateAdsFromMain() {
     const text = document.getElementById('mainContent').innerText.toLowerCase();
     const container = document.getElementById('adsContainer');
     container.innerHTML = '';
@@ -291,7 +291,7 @@ export function generateAdsFromMain() {
 /* ---------------------------------------------------------
    Context export / import (JSON)
 --------------------------------------------------------- */
-export function collectContext() {
+function collectContext() {
     const articles = [];
 
     function walk(el, parentId = null) {
@@ -312,7 +312,7 @@ export function collectContext() {
     return { version: 1, timestamp: Date.now(), articles };
 }
 
-export function exportContext() {
+function exportContext() {
     const payload = collectContext();
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -327,140 +327,150 @@ export function exportContext() {
  * Import a JSON context file and rebuild the workspace.
  * Restores any persisted field values (overriding file values).
  */
-export async function importContext(file) {
-    const reader = new FileReader();
-    reader.onload = ev => {
-        try {
-            const data = JSON.parse(ev.target.result);
-            if (!Array.isArray(data.articles)) throw new Error('Invalid format');
+async function importContext(file) {
+    showSpinner();
+    try{
+        const reader = new FileReader();
+        reader.onload = ev => {
+            try {
+                const data = JSON.parse(ev.target.result);
+                if (!Array.isArray(data.articles)) throw new Error('Invalid format');
 
-            // Clear current workspace
-            document.getElementById('mainContent').innerHTML = '';
+                // Clear current workspace
+                document.getElementById('mainContent').innerHTML = '';
 
-            // Map of id → article element (for nesting)
-            const lookup = {};
+                // Map of id → article element (for nesting)
+                const lookup = {};
 
-            data.articles.forEach(rec => {
-                const article = document.createElement('article');
-                article.dataset.id = rec.id;
+                data.articles.forEach(rec => {
+                    const article = document.createElement('article');
+                    article.dataset.id = rec.id;
 
-                const hdr = document.createElement('header');
-                hdr.textContent = rec.title;
-                article.appendChild(hdr);
+                    const hdr = document.createElement('header');
+                    hdr.textContent = rec.title;
+                    article.appendChild(hdr);
 
-                // Controls (same as createArticleNode)
-                const delBtn = document.createElement('button');
-                delBtn.className = 'control';
-                delBtn.setAttribute('aria-label', 'Delete article');
-                delBtn.textContent = '✕';
-                delBtn.addEventListener('click', () => {
-                    article.remove();
-                    generateAdsFromMain();
-                    scheduleSync();
-                });
-                article.appendChild(delBtn);
-
-                const togBtn = document.createElement('button');
-                togBtn.className = 'control';
-                togBtn.style.right = '2.5rem';
-                togBtn.setAttribute('aria-label', 'Toggle article visibility');
-                togBtn.textContent = '▾';
-                togBtn.addEventListener('click', () => {
-                    const body = article.querySelector('.body');
-                    if (body) {
-                        const hidden = body.hidden = !body.hidden;
-                        togBtn.textContent = hidden ? '▸' : '▾';
-                    }
-                });
-                article.appendChild(togBtn);
-
-                const childBtn = document.createElement('button');
-                childBtn.className = 'control';
-                childBtn.style.right = '4.5rem';
-                childBtn.setAttribute('aria-label', 'Add child article');
-                childBtn.textContent = '+';
-                childBtn.addEventListener('click', () => {
-                    const childName = prompt('Enter name of saved template to add as child:');
-                    if (!childName) return;
-                    const childTpl = uiState.library.find(t => t.name === childName);
-                    if (!childTpl) return toast('Template not found', true);
-                    addArticleFromTemplate(childTpl, article);
-                });
-                article.appendChild(childBtn);
-
-                const bodyDiv = document.createElement('div');
-                bodyDiv.className = 'body';
-                rec.inputs.forEach(inp => {
-                    const wrapper = document.createElement('div');
-                    const label = document.createElement('label');
-                    label.textContent = inp.name;
-                    const field = document.createElement('input');
-                    field.type = inp.type;
-                    field.name = inp.name;
-                    field.value = inp.value || '';
-
-                    // Restore persisted value if any (overrides file value)
-                    const persistedKey = `${rec.id}|${inp.name}`;
-                    if (uiState.fieldValueMap[persistedKey] !== undefined) {
-                        field.value = uiState.fieldValueMap[persistedKey];
-                    }
-
-                    // Persist on change (debounced)
-                    field.addEventListener('input', () => {
-                        persistFieldValue(rec.id, inp.name, field.value);
+                    // Controls (same as createArticleNode)
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'control';
+                    delBtn.setAttribute('aria-label', 'Delete article');
+                    delBtn.textContent = '✕';
+                    delBtn.addEventListener('click', () => {
+                        article.remove();
+                        generateAdsFromMain();
                         scheduleSync();
                     });
+                    article.appendChild(delBtn);
 
-                    label.appendChild(field);
-                    wrapper.appendChild(label);
-                    bodyDiv.appendChild(wrapper);
+                    const togBtn = document.createElement('button');
+                    togBtn.className = 'control';
+                    togBtn.style.right = '2.5rem';
+                    togBtn.setAttribute('aria-label', 'Toggle article visibility');
+                    togBtn.textContent = '▾';
+                    togBtn.addEventListener('click', () => {
+                        const body = article.querySelector('.body');
+                        if (body) {
+                            const hidden = body.hidden = !body.hidden;
+                            togBtn.textContent = hidden ? '▸' : '▾';
+                        }
+                    });
+                    article.appendChild(togBtn);
+
+                    const childBtn = document.createElement('button');
+                    childBtn.className = 'control';
+                    childBtn.style.right = '4.5rem';
+                    childBtn.setAttribute('aria-label', 'Add child article');
+                    childBtn.textContent = '+';
+                    childBtn.addEventListener('click', () => {
+                        const childName = prompt('Enter name of saved template to add as child:');
+                        if (!childName) return;
+                        const childTpl = uiState.library.find(t => t.name === childName);
+                        if (!childTpl) return toast('Template not found', true);
+                        addArticleFromTemplate(childTpl, article);
+                    });
+                    article.appendChild(childBtn);
+
+                    const bodyDiv = document.createElement('div');
+                    bodyDiv.className = 'body';
+                    rec.inputs.forEach(inp => {
+                        const wrapper = document.createElement('div');
+                        const label = document.createElement('label');
+                        label.textContent = inp.name;
+                        const field = document.createElement('input');
+                        field.type = inp.type;
+                        field.name = inp.name;
+                        field.value = inp.value || '';
+
+                        // Restore persisted value if any (overrides file value)
+                        const persistedKey = `${rec.id}|${inp.name}`;
+                        if (uiState.fieldValueMap[persistedKey] !== undefined) {
+                            field.value = uiState.fieldValueMap[persistedKey];
+                        }
+
+                        // Persist on change (debounced)
+                        field.addEventListener('input', () => {
+                            persistFieldValue(rec.id, inp.name, field.value);
+                            scheduleSync();
+                        });
+
+                        label.appendChild(field);
+                        wrapper.appendChild(label);
+                        bodyDiv.appendChild(wrapper);
+                    });
+                    article.appendChild(bodyDiv);
+
+                    // Insert according to parentId
+                    if (rec.parentId && lookup[rec.parentId]) {
+                        const parentBody = lookup[rec.parentId].querySelector('.body');
+                        parentBody.appendChild(article);
+                    } else {
+                        document.getElementById('mainContent').appendChild(article);
+                    }
+                    lookup[rec.id] = article;
                 });
-                article.appendChild(bodyDiv);
 
-                // Insert according to parentId
-                if (rec.parentId && lookup[rec.parentId]) {
-                    const parentBody = lookup[rec.parentId].querySelector('.body');
-                    parentBody.appendChild(article);
-                } else {
-                    document.getElementById('mainContent').appendChild(article);
-                }
-                lookup[rec.id] = article;
-            });
-
-            generateAdsFromMain();
-            toast('Context imported');
-        } catch (e) {
-            toast('Import failed: ' + e.message, true);
-        }
-    };
-    reader.readAsText(file);
+                generateAdsFromMain();
+                toast('Context imported');
+            } catch (e) {
+                toast('Import failed: ' + e.message, true);
+            }
+        };
+        reader.readAsText(file);
+    } finally {
+        hideSpinner();
+    }
 }
 
 /* ---------------------------------------------------------
    Decrypt an encrypted context Blob (produced by upload/download)
 --------------------------------------------------------- */
-export async function decryptContext(file) {
-    if (!authState.cryptoKey) {
-        toast('Set a password first (log in)', true);
-        return;
-    }
-    const reader = new FileReader();
-    reader.onload = async ev => {
-        try {
-            const b64 = ev.target.result.trim();
-            const decrypted = await decryptData(b64, authState.cryptoKey);
-            const data = JSON.parse(decrypted);
-
-            // Replace workspace with decrypted data
-            document.getElementById('mainContent').innerHTML = '';
-            const tempBlob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-            await importContext(tempBlob);
-            toast('Context decrypted & loaded');
-        } catch (e) {
-            toast('Decryption failed: ' + e.message, true);
+async function decryptContext(file) {
+    showSpinner();
+    try{
+        if (!authState.cryptoKey) {
+            toast('Set a password first (log in)', true);
+            return;
         }
-    };
-    reader.readAsText(file);
+        const reader = new FileReader();
+        reader.onload = async ev => {
+            try {
+                const b64 = ev.target.result.trim();
+                const decrypted = await decryptData(b64, authState.cryptoKey);
+                const data = JSON.parse(decrypted);
+
+                // Replace workspace with decrypted data
+                document.getElementById('mainContent').innerHTML = '';
+                const tempBlob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+                await importContext(tempBlob);
+                toast('Context decrypted & loaded');
+            } catch (e) {
+                toast('Decryption failed: ' + e.message, true);
+            }
+        };
+        reader.readAsText(file);
+    } finally {
+        hideSpinner();
+    }
 }
 
 /* ---------------------------------------------------------
@@ -488,7 +498,7 @@ function articleMatchesSearch(articleEl, term) {
  * Hide/show articles based on the current search term.
  * Ancestors of matching articles stay visible.
  */
-export function filterArticles(term) {
+function filterArticles(term) {
     const root = document.getElementById('mainContent');
     const allArticles = root.querySelectorAll('article');
 
@@ -516,7 +526,7 @@ export function filterArticles(term) {
 /* ---------------------------------------------------------
    Initialise the whole workspace (bind top‑level UI)
 --------------------------------------------------------- */
-export function initWorkspace() {
+function initWorkspace() {
     /* ---------- 1️⃣ Initialise Library UI ---------- */
     initLibraryUI();
 
@@ -618,6 +628,8 @@ export function initWorkspace() {
 
     /* ---------- 9️⃣ Generate ads for any pre‑existing content ---------- */
     generateAdsFromMain();
+    //hideSpinner
+    hideSpinner();
 }
 
 /* ---------------------------------------------------------

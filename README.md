@@ -48,6 +48,14 @@ SERVICES OVERVIEW
    - Purpose: Reverse proxy, automatic HTTPS (self-signed for local), SSL termination.
    - Requires: All web services.
 
+8. AUTHENTIK
+
+    Profile: auth
+    Endpoint: https://authentik.localhost
+    Purpose: Centralized Identity Provider (SSO) for Nextcloud, WordPress, Gitea, and Open WebUI.
+    Requires: Redis, PostgreSQL (dedicated), Caddy.
+
+
 QUICK START GUIDE
 
 STEP 1: PREREQUISITES
@@ -146,6 +154,18 @@ STALWART MAIL SETUP
    - SPF Record: v=spf1 mx -all
    - DKIM: Generate the DKIM key in the Stalwart Admin panel and add it as a TXT record.
    - Note: For local testing only, you can send emails between internal accounts without DNS.
+
+AUTHENTIK SETUP
+
+    Navigate to https://authentik.localhost.
+    Complete the initial setup wizard (create admin user).
+    Configure Applications:
+        Go to Applications -> Create.
+        Add applications for Nextcloud, WordPress, Gitea, and Open WebUI using their respective https://...localhost URLs.
+        Configure the OIDC or SAML settings in each target application (Nextcloud, Gitea, etc.) to point to the Authentik endpoints provided in the application settings.
+    Configure Flows: Set up authentication flows (e.g., username/password) and bind them to the applications.
+    Users: Create users in Authentik and assign them to groups. These users can now log in to all integrated services using their single Authentik credentials.
+
 
 FILE STRUCTURE REFERENCE
 

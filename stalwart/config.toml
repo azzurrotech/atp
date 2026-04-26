@@ -1,0 +1,29 @@
+# ============================================
+# STALWART MAIL SERVER CONFIGURATION
+# ============================================
+
+[general]
+server-name = "Stalwart Local"
+log-level = "info"
+
+[jmap]
+enabled = true
+domains = ["mail.localhost"]
+admin-user = "${JMAP_ADMIN_USER}"
+admin-password = "${JMAP_ADMIN_PASSWORD}"
+
+[smtp]
+enabled = true
+admin-user = "${SMTP_ADMIN_USER}"
+admin-password = "${SMTP_ADMIN_PASSWORD}"
+auth-required = true
+tls-required = true
+
+[storage]
+blob-dir = "/var/lib/stalwart/blob"
+message-store = "/var/lib/stalwart/message"
+index-dir = "/var/lib/stalwart/index"
+
+[logging]
+file = "/var/log/stalwart/stalwart.log"
+level = "info"

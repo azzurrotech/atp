@@ -1,8 +1,217 @@
-version: '3.8'
+version: "3.8"
+
+# ============================================
+# PROFILES
+# ============================================
+# Run: docker compose --profile <name> up -d
+# Examples:
+#   docker compose up -d                    # Core only (Ollama)
+#   docker compose --profile webui up -d    # Ollama + Open WebUI
+#   docker compose --profile all up -d      # Everything
+# ============================================
 
 services:
-  atp:
-    build: .
-    ports:
-      - "8080:8080"
+  # --- CORE: Ollama (Always Enabled) ---
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
     restart: unless-stopped
+    profiles: ["core", "all"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-24h}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # --- DATABASE: MariaDB (Required by NC, WP, Gitea) ---
+  db:
+    image: mariadb:10.6
+    container_name: ai-db
+    restart: unless-stopped
+    profiles: ["database", "storage", "website", "vcs", "all"]
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-RootPass123!}
+      - MYSQL_DATABASE=${MYSQL_DATABASE_DEFAULT}
+      - MYSQL_USER=${NC_DB_USER}
+      - MYSQL_PASSWORD=${NC_DB_PASS}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- OPEN WEBUI: Chat Interface (Requires Ollama) ---
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    profiles: ["webui", "all"]
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_NAME="Local AI Chat"
+    volumes:
+      - open_webui_data:/app/backend/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # --- NEXTCLOUD: File Storage + AI (Requires DB) ---
+  nextcloud:
+    image: nextcloud:latest
+    container_name: nextcloud
+    restart: unless-stopped
+    profiles: ["storage", "all"]
+    ports:
+      - "8081:80"
+    environment:
+      - NEXTCLOUD_ADMIN_USER=${NC_ADMIN_USER}
+      - NEXTCLOUD_ADMIN_PASSWORD=${NC_ADMIN_PASS}
+      - NEXTCLOUD_TRUSTED_DOMAINS=${NC_TRUSTED_DOMAINS}
+      - MYSQL_HOST=db
+      - MYSQL_DATABASE=${NC_DB_NAME}
+      - MYSQL_USER=${NC_DB_USER}
+      - MYSQL_PASSWORD=${NC_DB_PASS}
+    volumes:
+      - nextcloud_data:/var/www/html
+      - nextcloud_files:/var/www/html/data
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  # --- WORDPRESS: Client Website (Requires DB) ---
+  wordpress:
+    image: wordpress:latest
+    container_name: wordpress
+    restart: unless-stopped
+    profiles: ["website", "all"]
+    ports:
+      - "8082:80"
+    environment:
+      - WORDPRESS_DB_HOST=db
+      - WORDPRESS_DB_USER=${WP_DB_USER}
+      - WORDPRESS_DB_PASSWORD=${WP_DB_PASS}
+      - WORDPRESS_DB_NAME=${WP_DB_NAME}
+      - WORDPRESS_ADMIN_USER=${WP_ADMIN_USER}
+      - WORDPRESS_ADMIN_PASSWORD=${WP_ADMIN_PASS}
+      - WORDPRESS_ADMIN_EMAIL=${WP_ADMIN_EMAIL}
+    volumes:
+      - wordpress_data:/var/www/html
+      - ./wordpress/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # --- GITEA: Version Control (Requires DB) ---
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    restart: unless-stopped
+    profiles: ["vcs", "all"]
+    ports:
+      - "3001:3000"
+      - "2222:22"
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - DB_TYPE=mysql
+      - DB_HOST=db:3306
+      - DB_NAME=${GITEA_DB_NAME}
+      - DB_USER=${GITEA_DB_USER}
+      - DB_PASSWD=${GITEA_DB_PASS}
+      - ROOT_URL=https://git.localhost
+      - SSH_DOMAIN=git.localhost
+      - SSH_PORT=2222
+      - DISABLE_SSH=false
+      - START_SSH_SERVER=true
+      - RUN_MODE=prod
+    volumes:
+      - gitea_data:/data
+      - gitea_logs:/var/log/gitea
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # --- STALWART: Mail Server (Standalone) ---
+  stalwart:
+    image: stalwartlabs/mail-server:latest
+    container_name: stalwart
+    restart: unless-stopped
+    profiles: ["mail", "all"]
+    ports:
+      - "25:25"
+      - "587:587"
+      - "993:993"
+      - "4190:4190"
+      - "8443:8443"
+    environment:
+      - JMAP_ENABLE=true
+      - JMAP_DOMAINS=${MAIL_DOMAIN}
+      - JMAP_ADMIN_USER=${STALWART_ADMIN_USER}
+      - JMAP_ADMIN_PASSWORD=${STALWART_ADMIN_PASS}
+      - SMTP_ADMIN_USER=${MAIL_USER}
+      - SMTP_ADMIN_PASSWORD=${MAIL_PASS}
+      - JMAP_SMTP_AUTH=true
+      - JMAP_SMTP_AUTH_REQUIRE_TLS=true
+    volumes:
+      - stalwart_data:/var/lib/stalwart
+      - ./stalwart/config.toml:/etc/stalwart/config.toml:ro
+      - ./stalwart/certs:/certs:ro
+
+  # --- CADDY: Reverse Proxy (Requires Web Services) ---
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    profiles: ["proxy", "all"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      open-webui:
+        condition: service_started
+      nextcloud:
+        condition: service_started
+      wordpress:
+        condition: service_started
+      gitea:
+        condition: service_started
+      stalwart:
+        condition: service_started
+
+volumes:
+  ollama_data:
+  open_webui_data:
+  nextcloud_data:
+  nextcloud_files:
+  wordpress_data:
+  gitea_data:
+  gitea_logs:
+  stalwart_data:
+  db_data:
+  caddy_data:
+  caddy_config:

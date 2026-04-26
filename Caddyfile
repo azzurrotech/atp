@@ -1,0 +1,71 @@
+{
+    email ${CADDY_EMAIL:-your-email@example.com}
+    auto_https off
+}
+
+# --- Open WebUI ---
+ai.localhost {
+    reverse_proxy open-webui:8080 {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    transport http {
+        read_timeout 600s
+        write_timeout 600s
+    }
+    flush_interval -1
+}
+
+# --- Nextcloud (Optional) ---
+nc.localhost {
+    try_files {path} {path}/ /index.php/{path}
+    reverse_proxy nextcloud:80 {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
+
+# --- WordPress (Optional) ---
+site.localhost {
+    try_files {path} {path}/ /index.php/{path}
+    reverse_proxy wordpress:80 {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# --- Gitea (Optional) ---
+git.localhost {
+    reverse_proxy gitea:3000 {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# --- Stalwart Admin (Optional) ---
+mail.localhost {
+    reverse_proxy stalwart:8443 {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# --- Fallback: Show all available services ---
+localhost {
+    respond "
+    <h1>AI Stack Services</h1>
+    <ul>
+        <li><a href='https://ai.localhost'>Open WebUI</a></li>
+        <li><a href='https://nc.localhost'>Nextcloud</a></li>
+        <li><a href='https://site.localhost'>WordPress</a></li>
+        <li><a href='https://git.localhost'>Gitea</a></li>
+        <li><a href='https://mail.localhost'>Stalwart Admin</a></li>
+    </ul>
+    "
+}

@@ -222,3 +222,20 @@ SUPPORT RESOURCES
 - Nextcloud Admin Manual: https://docs.nextcloud.com
 - Gitea Documentation: https://docs.gitea.com
 - Stalwart Labs Docs: https://stalwartlabs.com/documentation
+
+### Supporting Open Source
+
+The AzzurroTech Platform relies on the following open-source projects. We recommend a monthly donation of $10 CAD to each to support their continued development:
+
+| Project | Description | Donation Link |
+| :--- | :--- | :--- |
+| **Ollama** | Local LLM runner | [Donate via GitHub Sponsors](https://github.com/sponsors/ollama) |
+| **Open WebUI** | Chat interface for LLMs | [Donate via GitHub Sponsors](https://github.com/sponsors/open-webui) |
+| **Nextcloud** | File sync & share | [Donate to Nextcloud GmbH](https://nextcloud.com/contribute/) |
+| **WordPress** | Web publishing platform | [Donate to WordPress Foundation](https://wordpressfoundation.org/donate/) |
+| **Gitea** | Painless self-hosted Git | [Donate via GitHub Sponsors](https://github.com/sponsors/go-gitea) |
+| **Stalwart Labs** | Modern mail server | [Support Stalwart](https://stalwartlabs.com/contact) |
+| **Caddy** | Secure web server | [Donate via GitHub Sponsors](https://github.com/sponsors/mholt) |
+| **MariaDB** | Open source database | [Donate to MariaDB Foundation](https://mariadb.org/donate/) |
+
+*Note: Donation links may redirect to GitHub Sponsors, Open Collective, or the project's official donation page. Contributions are voluntary.*

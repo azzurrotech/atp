@@ -1,0 +1,117 @@
+{{define "templates/base.html"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<style>
+:root{--bg:#0f1420;--panel:#171e2e;--panel2:#1d2740;--ink:#e6eaf3;--mut:#8b95ab;--line:#2a3450;--acc:#4f8cff;--ok:#3ecf8e;--warn:#ffb454;--bad:#ff6b6b;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px 80px}
+nav.top{background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+nav.top .wrap{display:flex;gap:4px;align-items:center;padding-top:0;padding-bottom:0;flex-wrap:wrap}
+nav.top a{display:inline-block;padding:13px 12px;color:var(--mut);border-bottom:2px solid transparent}
+nav.top a.on{color:var(--ink);border-bottom-color:var(--acc)}
+nav.top .brand{color:var(--ink);font-weight:700;padding:13px 12px 13px 0}
+nav.top .sp{flex:1}
+h1{font-size:22px}h2{font-size:17px;color:var(--ink);margin:26px 0 10px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));margin-top:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h3{margin:0 0 6px;font-size:14px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.card .big{font-size:26px;font-weight:700}
+.card .sub{color:var(--mut);font-size:13px}
+table{width:100%;border-collapse:collapse;margin-top:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em;background:var(--panel2)}
+tr:last-child td{border-bottom:none}
+td.mono,code,.mono{font-family:var(--mono);font-size:13px;word-break:break-all}
+button,.btn{background:var(--acc);color:#04101f;border:0;border-radius:7px;padding:8px 14px;font-size:14px;font-weight:600;cursor:pointer}
+button.sec{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+button.danger{background:var(--bad);color:#1c0505}
+button.sm{padding:4px 9px;font-size:13px}
+input,select,textarea{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:8px 10px;font-size:14px;width:100%}
+label{display:block;color:var(--mut);font-size:13px;margin:10px 0 4px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.row>*{flex:1;min-width:160px}
+.row button{flex:0 0 auto}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+.pill.ok{background:rgba(62,207,142,.15);color:var(--ok)}
+.pill.warn{background:rgba(255,180,84,.15);color:var(--warn)}
+.pill.bad{background:rgba(255,107,107,.15);color:var(--bad)}
+.pill.mut{background:rgba(139,149,171,.15);color:var(--mut)}
+pre.out{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;max-height:420px;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap}
+.msg{padding:9px 12px;border-radius:8px;margin:12px 0;display:none}
+.msg.show{display:block}
+.msg.err{background:rgba(255,107,107,.12);border:1px solid rgba(255,107,107,.4)}
+.msg.ok{background:rgba(62,207,142,.12);border:1px solid rgba(62,207,142,.4)}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:16px 0}
+.tabs a{padding:9px 14px;color:var(--mut);border-bottom:2px solid transparent}
+.tabs a.on{color:var(--ink);border-bottom-color:var(--acc)}
+.login{max-width:360px;margin:12vh auto 0}
+.login .card{padding:26px}
+.badge{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.badge.up{background:var(--ok)}.badge.down{background:var(--bad)}
+.muted{color:var(--mut);font-size:13px}
+@media(max-width:640px){.wrap{padding:0 12px 60px}}
+</style>
+</head>
+<body>
+{{if ne .Active "login"}}
+<nav class="top"><div class="wrap">
+  <span class="brand">ATP<span class="muted"> · AzzurroTech Platform</span></span>
+  <a href="/" class="{{if eq .Active "dashboard"}}on{{end}}">Overview</a>
+  <a href="/clients" class="{{if eq .Active "clients"}}on{{end}}">Clients</a>
+  {{if .ClientID}}
+  <span class="sp muted" style="padding:0 8px"></span>
+  <a href="/clients/{{.ClientID}}" class="{{if eq .Active "client"}}on{{end}}">{{.ClientID}}</a>
+  <a href="/clients/{{.ClientID}}/files" class="{{if eq .Active "files"}}on{{end}}">Files</a>
+  <a href="/clients/{{.ClientID}}/tables" class="{{if eq .Active "tables"}}on{{end}}">Tables</a>
+  <a href="/clients/{{.ClientID}}/security" class="{{if eq .Active "security"}}on{{end}}">Security</a>
+  <a href="/clients/{{.ClientID}}/usage" class="{{if eq .Active "usage"}}on{{end}}">Usage</a>
+  <a href="/clients/{{.ClientID}}/secrets" class="{{if eq .Active "secrets"}}on{{end}}">Secrets</a>
+  <a href="/c/{{.ClientID}}/" target="_blank" title="open the client's hosted web app">🌐 site</a>
+  {{end}}
+  <span class="sp"></span>
+  <span class="muted" style="padding:0 12px">{{.UserName}}</span>
+  <form method="post" action="/logout"><button class="sec sm" type="submit">Sign out</button></form>
+</div></nav>
+{{end}}
+<main class="wrap">
+{{template "content" .}}
+</main>
+<script>
+// Shared helpers. API calls use credentials (session cookie).
+async function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({'Accept':'application/json'}, opts.headers||{});
+  if(opts.body && !(opts.body instanceof FormData)){
+    opts.headers['Content-Type'] = 'application/json';
+    if(typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(path, opts);
+  let data = null;
+  try { data = await res.json(); } catch(e){}
+  if(!res.ok){
+    const msg = (data && data.error) ? data.error : ('HTTP ' + res.status);
+    const err = new Error(msg); err.status = res.status; err.data = data; throw err;
+  }
+  return data;
+}
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function gb(n){ return (n / 1073741824).toFixed(4) + ' GB'; }
+function usd(n){ return '$' + (Number(n)||0).toFixed(4); }
+function flash(msg, ok, el){
+  el = el || document.getElementById('msg');
+  if(!el) return;
+  el.textContent = msg;
+  el.className = 'msg show ' + (ok ? 'ok' : 'err');
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.className='msg', 6000);
+}
+</script>
+</body>
+</html>
+{{end}}

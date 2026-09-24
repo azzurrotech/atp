@@ -1,0 +1,181 @@
+{{define "content"}}
+<div id="msg" class="msg"></div>
+<h1>Security · {{.ClientID}}</h1>
+<p class="muted">Identity-less IAM provided by <b>shepherd</b> (capability tokens,
+block keys, magic links, revocation). Keys for this client are automatically
+scoped to <code>client:{{.ClientID}}</code>; nothing identifying is ever stored.</p>
+<div class="tabs">
+  <a href="/clients/{{.ClientID}}">Dashboard</a>
+  <a href="/clients/{{.ClientID}}/files">Files</a>
+  <a href="/clients/{{.ClientID}}/tables">Tables</a>
+  <a href="/clients/{{.ClientID}}/security" class="on">Security</a>
+  <a href="/clients/{{.ClientID}}/usage">Usage</a>
+  <a href="/clients/{{.ClientID}}/secrets">Secrets</a>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Issue capability token</h3>
+    <label>Extra scopes (comma separated)</label><input id="kScopes" placeholder="read:orders, write:orders">
+    <label>TTL (Go duration, e.g. 24h)</label><input id="kTTL" placeholder="24h">
+    <label>Subject (optional opaque id)</label><input id="kSubj" placeholder="user-123">
+    <div style="margin-top:12px"><button id="btnIssue">Issue token</button></div>
+    <pre class="out" id="kOut">—</pre>
+  </div>
+  <div class="card">
+    <h3>Block key</h3>
+    <label>Count</label><input id="bCount" type="number" min="1" value="5">
+    <label>Block id (optional)</label><input id="bId" placeholder="promo-campaign-42">
+    <label>TTL</label><input id="bTTL" placeholder="30d">
+    <div style="margin-top:12px"><button id="btnBlock" class="sec" style="background:var(--panel2)">Issue block</button></div>
+  </div>
+  <div class="card">
+    <h3>Magic link</h3>
+    <label>Redirect target</label><input id="mNext" value="/">
+    <div style="margin-top:12px"><button id="btnMagic" class="sec" style="background:var(--panel2)">Create magic link URL</button></div>
+  </div>
+  <div class="card">
+    <h3>Verify / revoke</h3>
+    <label>Token to verify or revoke</label><textarea id="vTok" rows="3" placeholder="paste a token…"></textarea>
+    <div class="row" style="margin-top:12px">
+      <button id="btnVerify" class="sec" style="background:var(--panel2);flex:0 0 auto">Verify</button>
+      <button id="btnRevoke" class="danger" style="flex:0 0 auto">Revoke</button>
+    </div>
+  </div>
+</div>
+
+<h2>Client JavaScript crypto key</h2>
+<div class="card">
+  <div class="row">
+    <div><label>Scope</label><input id="jScope" value="client:{{.ClientID}}"></div>
+    <div><label>Usage</label><input id="jUsage" placeholder="session" value="session"></div>
+    <button id="btnJSKey" class="sec" style="background:var(--panel2)">Get JS key</button>
+  </div>
+  <pre class="out" id="jOut">—</pre>
+</div>
+
+<h2>Platform security (shepherd, global)</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Firewall rules</h3>
+    <table><thead><tr><th>Rule</th><th>Action</th><th>Path</th><th></th></tr></thead>
+      <tbody id="fwRows"><tr><td class="muted" colspan="4">loading…</td></tr></tbody></table>
+    <div class="row" style="margin-top:10px">
+      <div><label>New rule (name, action, pathGlob)</label><input id="fwNew" placeholder='{"name":"block-admin","action":"deny","pathGlob":"/admin/**"}'></div>
+      <button id="btnFWAdd" class="sec" style="background:var(--panel2)">Add</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Rate limiter</h3>
+    <label>Client key to inspect</label><input id="rlKey" placeholder="GET /c/{{.ClientID}}/">
+    <div class="row" style="margin-top:12px">
+      <button id="btnRate" class="sec" style="background:var(--panel2)">Status</button>
+      <button id="btnRateReset" class="danger">Reset all</button>
+    </div>
+    <pre class="out" id="rlOut">—</pre>
+  </div>
+  <div class="card">
+    <h3>Gateway upstreams (reverse proxy at /gw/)</h3>
+    <table><thead><tr><th>Prefix</th><th>Target</th><th></th></tr></thead>
+      <tbody id="upRows"><tr><td class="muted" colspan="3">loading…</td></tr></tbody></table>
+    <div class="row" style="margin-top:10px">
+      <div><label>New upstream (name, prefix, target)</label><input id="upNew" placeholder='{"name":"orders","prefix":"orders","target":"http://localhost:9000"}'></div>
+      <button id="btnUpAdd" class="sec" style="background:var(--panel2)">Add</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const C = '{{.ClientID}}';
+function show(pre, v){ pre.textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2); }
+document.getElementById('btnIssue').addEventListener('click', async () => {
+  try{
+    const scopes = kScopes.value.split(',').map(s=>s.trim()).filter(Boolean);
+    const d = await api('/api/clients/' + C + '/keys', {method:'POST', body:{scopes, ttl:kTTL.value||undefined, subject:kSubj.value||undefined}});
+    show(kOut, d); flash('Token issued', true);
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnBlock').addEventListener('click', async () => {
+  try{
+    const d = await api('/api/clients/' + C + '/keys/block', {method:'POST', body:{count:parseInt(bCount.value,10), block:bId.value||undefined, ttl:bTTL.value||undefined}});
+    show(kOut, {block:d.block, count:d.count, sample:d.keys.slice(0,2)}); flash('Block of ' + d.count + ' issued', true);
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnMagic').addEventListener('click', async () => {
+  try{
+    const d = await api('/api/clients/' + C + '/keys/magic', {method:'POST', body:{next:mNext.value||'/'}});
+    show(kOut, d); flash('Magic link URL created', true);
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnVerify').addEventListener('click', async () => {
+  if(!vTok.value.trim()){ flash('paste a token first', false); return; }
+  try{
+    const d = await api('/api/clients/' + C + '/verify?t=' + encodeURIComponent(vTok.value.trim()));
+    show(kOut, d); flash('Token is valid', true);
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnRevoke').addEventListener('click', async () => {
+  if(!vTok.value.trim()){ flash('paste a token first', false); return; }
+  try{
+    const d = await api('/api/clients/' + C + '/revoke', {method:'POST', body:{token:vTok.value.trim()}});
+    flash('Revoked ' + d.revoked, true); vTok.value='';
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnJSKey').addEventListener('click', async () => {
+  try{
+    const d = await api('/api/clients/' + C + '/jskey?scope=' + encodeURIComponent(jScope.value) + '&usage=' + encodeURIComponent(jUsage.value));
+    show(jOut, d); flash('JS key ready (WebCrypto AES-GCM, raw base64)', true);
+  }catch(err){ flash(err.message, false); }
+});
+
+// Platform-wide shepherd controls.
+async function loadFW(){
+  try{
+    const d = await api('/api/shepherd/firewall/rules');
+    const rows = document.getElementById('fwRows');
+    if(!d.rules.length){ rows.innerHTML = '<tr><td class="muted" colspan="4">no rules (default ' + (d.default_allow ? 'allow' : 'deny') + ')</td></tr>'; return; }
+    rows.innerHTML = d.rules.map(r => '<tr><td class="mono">' + esc(r.name || r.id) + '</td>' +
+      '<td>' + (r.action === 'allow' ? '<span class="pill ok">allow</span>' : '<span class="pill bad">deny</span>') + '</td>' +
+      '<td class="mono">' + esc(r.path_glob || '') + '</td>' +
+      '<td><button class="sm danger" onclick="delFW(' + JSON.stringify(r.id) + ')">×</button></td></tr>').join('');
+  }catch(err){ flash(err.message, false); }
+}
+window.delFW = async function(id){
+  try{ await api('/api/shepherd/firewall/rules/' + encodeURIComponent(id), {method:'DELETE'}); loadFW(); }
+  catch(err){ flash(err.message, false); }
+};
+document.getElementById('btnFWAdd').addEventListener('click', async () => {
+  let rule; try{ rule = JSON.parse(fwNew.value); }catch(e){ flash('rule must be JSON', false); return; }
+  try{ await api('/api/shepherd/firewall/rules', {method:'POST', body:rule}); fwNew.value=''; loadFW(); flash('Rule added', true); }
+  catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnRate').addEventListener('click', async () => {
+  try{ const d = await api('/api/shepherd/ratelimit/status?key=' + encodeURIComponent(rlKey.value)); show(rlOut, d); }
+  catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnRateReset').addEventListener('click', async () => {
+  try{ await api('/api/shepherd/ratelimit/reset', {method:'POST', body:{}}); flash('Rate limiter reset', true); }
+  catch(err){ flash(err.message, false); }
+});
+async function loadUp(){
+  try{
+    const d = await api('/api/shepherd/upstreams');
+    const rows = document.getElementById('upRows');
+    if(!d.upstreams.length){ rows.innerHTML = '<tr><td class="muted" colspan="3">no upstreams</td></tr>'; return; }
+    rows.innerHTML = d.upstreams.map(u => '<tr><td class="mono">' + esc(u.prefix) + '</td>' +
+      '<td class="mono">' + esc(u.target) + (u.public ? ' <span class="pill mut">public</span>' : '') + '</td>' +
+      '<td><button class="sm danger" onclick="delUp(' + JSON.stringify(u.prefix) + ')">×</button></td></tr>').join('');
+  }catch(err){ flash(err.message, false); }
+}
+window.delUp = async function(prefix){
+  try{ await api('/api/shepherd/upstreams/' + encodeURIComponent(prefix), {method:'DELETE'}); loadUp(); }
+  catch(err){ flash(err.message, false); }
+};
+document.getElementById('btnUpAdd').addEventListener('click', async () => {
+  let up; try{ up = JSON.parse(upNew.value); }catch(e){ flash('upstream must be JSON', false); return; }
+  try{ await api('/api/shepherd/upstreams', {method:'POST', body:up}); upNew.value=''; loadUp(); flash('Upstream registered at /gw/' + up.prefix + '/', true); }
+  catch(err){ flash(err.message, false); }
+});
+loadFW(); loadUp();
+</script>
+{{end}}

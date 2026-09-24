@@ -1,0 +1,86 @@
+{{define "content"}}
+<div id="msg" class="msg"></div>
+<h1>Client · {{.ClientID}}</h1>
+<p class="muted">{{.Client.Name}} — silo <code>{{.ClientID}}</code>, tables <code>{{.ClientID}}/…</code>, scope <code>client:{{.ClientID}}</code></p>
+
+<div class="tabs">
+  <a href="/clients/{{.ClientID}}" class="on">Dashboard</a>
+  <a href="/clients/{{.ClientID}}/files">Files</a>
+  <a href="/clients/{{.ClientID}}/tables">Tables</a>
+  <a href="/clients/{{.ClientID}}/security">Security</a>
+  <a href="/clients/{{.ClientID}}/usage">Usage</a>
+  <a href="/clients/{{.ClientID}}/secrets">Secrets</a>
+  <a href="/c/{{.ClientID}}/" target="_blank">🌐 hosted site</a>
+</div>
+
+<div class="grid">
+  <div class="card"><h3>Silo size (now)</h3><div class="big" id="dSize">–</div><div class="sub">song + pod on disk</div></div>
+  <div class="card"><h3>Avg hourly GB</h3><div class="big" id="dAvg">–</div><div class="sub">retained window</div></div>
+  <div class="card"><h3>Bill (retained)</h3><div class="big" id="dCost">–</div><div class="sub" id="dRate">–</div></div>
+  <div class="card"><h3>Tables</h3><div class="big" id="dTables">–</div><div class="sub">pod tables</div></div>
+</div>
+
+<h2>Configuration</h2>
+<div class="card">
+  <div class="row">
+    <div><label>Display name</label><input id="eName" placeholder="{{.Client.Name}}"></div>
+    <div><label>Price per GB·hour (USD)</label><input id="ePrice" type="number" min="0" step="0.0001" placeholder="{{.Client.PricePerGBHour}}"></div>
+    <div><label>Log retention (hours, min 24)</label><input id="eRet" type="number" min="24" placeholder="{{.Client.RetentionHours}}"></div>
+    <div><label>Notes</label><input id="eNotes" placeholder="—"></div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <label style="flex:0 0 auto;margin:0"><input id="eCharge" type="checkbox" checked> Chargeable</label>
+    <label style="flex:0 0 auto;margin:0"><input id="eDisable" type="checkbox"> Disabled</label>
+    <button id="btnSave" style="margin-left:auto">Save</button>
+    <button id="btnDelete" class="danger">Delete client</button>
+  </div>
+</div>
+
+<h2>Links</h2>
+<div class="card">
+  <table>
+    <tr><td>Hosted web app</td><td class="mono"><a href="/c/{{.ClientID}}/">/c/{{.ClientID}}/</a></td></tr>
+    <tr><td>Files API (song, scoped)</td><td class="mono"><code>/c/{{.ClientID}}/api/song/silos/{{.ClientID}}/files</code></td></tr>
+    <tr><td>Database API (pod, scoped)</td><td class="mono"><code>/c/{{.ClientID}}/api/pod/table/{{.ClientID}}/…</code></td></tr>
+    <tr><td>Security (shepherd, scoped)</td><td class="mono"><code>POST /api/clients/{{.ClientID}}/keys</code></td></tr>
+  </table>
+</div>
+
+<script>
+(async function(){
+  try{
+    const d = await api('/api/clients/{{.ClientID}}');
+    const c = d.client;
+    document.getElementById('dSize').textContent = gb(d.silo_bytes);
+    document.getElementById('dRate').textContent = usd(c.price_per_gb_hour) + '/GB·h';
+    document.getElementById('eCharge').checked = !!c.chargeable;
+    document.getElementById('eDisable').checked = !!c.disabled;
+    if(d.billing){
+      document.getElementById('dAvg').textContent = gb(d.billing.avg_silo_bytes);
+      document.getElementById('dCost').textContent = usd(d.billing.total_cost);
+      document.getElementById('dAvg').title = d.billing.sampled_hours + ' sampled hours';
+    }
+    document.getElementById('dTables').textContent = (d.tables||[]).length;
+  }catch(err){ flash(err.message, false); }
+})();
+document.getElementById('btnSave').addEventListener('click', async () => {
+  try{
+    const body = {
+      name: eName.value.trim() || undefined,
+      notes: eNotes.value.trim() || undefined,
+      chargeable: eCharge.checked,
+      disabled: eDisable.checked
+    };
+    if(ePrice.value) body.price_per_gb_hour = parseFloat(ePrice.value);
+    if(eRet.value) body.retention_hours = parseInt(eRet.value,10);
+    await api('/api/clients/{{.ClientID}}', {method:'PUT', body});
+    flash('Saved', true); location.reload();
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnDelete').addEventListener('click', async () => {
+  if(!confirm('Delete client {{.ClientID}}? This removes the registry entry and silo directory.')) return;
+  try{ await api('/api/clients/{{.ClientID}}', {method:'DELETE'}); location.href = '/clients'; }
+  catch(err){ flash(err.message, false); }
+});
+</script>
+{{end}}

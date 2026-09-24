@@ -1,0 +1,46 @@
+{{define "content"}}
+<div id="msg" class="msg"></div>
+<h1>Admin overview</h1>
+<p class="muted">The whole platform at a glance. Every client is siloed (own song
+silo, own pod namespace, own shepherd scope) but admins see the entire picture.</p>
+
+<div class="grid">
+  <div class="card"><h3>Clients</h3><div class="big" id="cClients">–</div><div class="sub" id="cChargeable">–</div></div>
+  <div class="card"><h3>Hosted silos</h3><div class="big" id="cSilo">–</div><div class="sub">on disk right now</div></div>
+  <div class="card"><h3>Billed (retained window)</h3><div class="big" id="cRevenue">–</div><div class="sub" id="cUptime">–</div></div>
+  <div class="card"><h3>Services</h3><div id="cServices" class="mono" style="font-size:13px">–</div></div>
+</div>
+
+<h2>Clients</h2>
+<table>
+  <thead><tr><th>Client</th><th>Chargeable</th><th>Silo (now)</th><th>Avg hourly</th><th>Cost</th><th>Requests</th><th>Retention</th><th></th></tr></thead>
+  <tbody id="clientRows"><tr><td class="muted" colspan="8">loading…</td></tr></tbody>
+</table>
+
+<script>
+(async function(){
+  try{
+    const s = await api('/api/summary');
+    document.getElementById('cClients').textContent = s.clients_total;
+    document.getElementById('cChargeable').textContent = s.clients_chargeable + ' chargeable';
+    document.getElementById('cSilo').textContent = gb(s.total_silo_bytes);
+    document.getElementById('cRevenue').textContent = usd(s.total_revenue);
+    document.getElementById('cUptime').textContent = 'up ' + Math.round(s.uptime_seconds/60) + ' min';
+    document.getElementById('cServices').innerHTML = s.services.map(x =>
+      '<div><span class="badge up"></span>' + esc(x.name) + ' <span class="muted">' + esc(x.mount) + '</span></div>').join('');
+    const rows = document.getElementById('clientRows');
+    if(!s.clients.length){ rows.innerHTML = '<tr><td class="muted" colspan="8">No clients yet — create one on the Clients page.</td></tr>'; return; }
+    rows.innerHTML = s.clients.map(c => '<tr>' +
+      '<td><a href="/clients/' + esc(c.id) + '"><b>' + esc(c.id) + '</b></a><div class="muted">' + esc(c.name) + '</div></td>' +
+      '<td>' + (c.chargeable ? '<span class="pill ok">on</span>' : '<span class="pill mut">off</span>') + (c.disabled ? ' <span class="pill bad">disabled</span>' : '') + '</td>' +
+      '<td class="mono">' + gb(c.silo_bytes) + '</td>' +
+      '<td class="mono">' + (c.avg_silo_gb ? gb(c.avg_silo_gb*1073741824) : '–') + '</td>' +
+      '<td class="mono">' + usd(c.total_cost) + '</td>' +
+      '<td>' + (c.total_requests||0) + '</td>' +
+      '<td>' + c.retention_hours + 'h</td>' +
+      '<td><a href="/clients/' + esc(c.id) + '" class="btn sm" style="padding:3px 10px">open</a></td>' +
+      '</tr>').join('');
+  }catch(err){ flash(err.message, false); }
+})();
+</script>
+{{end}}

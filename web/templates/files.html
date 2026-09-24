@@ -1,0 +1,109 @@
+{{define "content"}}
+<div id="msg" class="msg"></div>
+<h1>Files · {{.ClientID}}</h1>
+<p class="muted">Static repo managed by <b>song</b> (silo <code>{{.ClientID}}</code>),
+reached through atp's scoped pass-through at <code>/c/{{.ClientID}}/api/song/…</code>.
+Encrypted files are AES-256-GCM at rest and transparently decrypted on serve.</p>
+<div class="tabs">
+  <a href="/clients/{{.ClientID}}">Dashboard</a>
+  <a href="/clients/{{.ClientID}}/files" class="on">Files</a>
+  <a href="/clients/{{.ClientID}}/tables">Tables</a>
+  <a href="/clients/{{.ClientID}}/security">Security</a>
+  <a href="/clients/{{.ClientID}}/usage">Usage</a>
+  <a href="/clients/{{.ClientID}}/secrets">Secrets</a>
+</div>
+
+<h2>Create / replace file</h2>
+<div class="card">
+  <div class="row">
+    <div><label>Path inside silo</label><input id="fPath" placeholder="index.html"></div>
+    <div><label style="display:flex;align-items:center;gap:8px;margin:26px 0 0"><input id="fEnc" type="checkbox" style="width:auto"> Encrypt at rest</label></div>
+    <div><label style="display:flex;align-items:center;gap:8px;margin:26px 0 0"><input id="fOver" type="checkbox" style="width:auto"> Overwrite existing</label></div>
+    <button id="btnCreate">Write file</button>
+  </div>
+  <label>Content</label>
+  <textarea id="fContent" rows="8" placeholder="file content…"></textarea>
+  <div class="row" style="margin-top:10px">
+    <div><label>…or upload a local file</label><input id="fUpload" type="file"></div>
+    <button id="btnUpload" class="sec">Upload</button>
+  </div>
+</div>
+
+<h2>Files</h2>
+<div class="card">
+  <div class="row">
+    <div><label>Directory</label><select id="fDir"><option value="">/ (root)</option></select></div>
+    <div style="flex:0 0 auto"><button id="btnRefresh" class="sec" style="margin-top:26px">Refresh</button></div>
+  </div>
+  <table>
+    <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Encrypted</th><th>Modified</th><th></th></tr></thead>
+    <tbody id="fRows"><tr><td class="muted" colspan="6">loading…</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+const base = '/c/{{.ClientID}}/api/song/silos/{{.ClientID}}';
+let currentPath = '';
+async function load(dir){
+  currentPath = dir || '';
+  const q = currentPath ? '?path=' + encodeURIComponent(currentPath) : '';
+  const d = await api(base + '/files' + q);
+  const rows = document.getElementById('fRows');
+  if(!d.files.length){ rows.innerHTML = '<tr><td class="muted" colspan="6">empty directory</td></tr>'; return; }
+  rows.innerHTML = d.files.map(f => {
+    const isDir = f.is_dir;
+    const name = isDir ? '<b>' + esc(f.name) + '/</b>' : esc(f.name);
+    const link = isDir
+      ? '<a href="#" onclick="return atpCd(' + JSON.stringify(currentPath ? currentPath + '/' + f.name : f.name) + ')">' + name + '</a>'
+      : '<a href="javascript:void(0)" onclick="atpRead(' + JSON.stringify(currentPath ? currentPath + '/' + f.name : f.name) + ')">' + name + '</a>';
+    return '<tr>' +
+      '<td>' + link + '</td>' +
+      '<td class="muted">' + esc(f.content_type || (isDir ? 'dir' : '')) + '</td>' +
+      '<td class="mono">' + (isDir ? '–' : f.size + ' B') + '</td>' +
+      '<td>' + (f.encrypted ? '<span class="pill ok">enc</span>' : '<span class="pill mut">–</span>') + '</td>' +
+      '<td class="muted">' + esc(String(f.modified||'').slice(0,16)) + '</td>' +
+      '<td>' + (isDir ? '' : '<button class="sm danger" onclick="atpDelete(' + JSON.stringify(currentPath ? currentPath + '/' + f.name : f.name) + ')">delete</button>') + '</td>' +
+      '</tr>';
+  }).join('');
+  const sel = document.getElementById('fDir');
+  sel.innerHTML = '<option value="">/ (root)</option>';
+  if(currentPath) sel.innerHTML += '<option value="">↑ up (' + esc(currentPath) + ')</option>';
+  sel.value = '';
+}
+window.atpCd = async function(dir){ await load(dir); return false; };
+window.atpRead = async function(rel){
+  try{
+    const d = await api(base + '/file?path=' + encodeURIComponent(rel));
+    fPath.value = rel; fContent.value = d.content; fEnc.checked = !!d.encrypted;
+    flash('Loaded ' + rel + ' — you can edit, then press “Write file”.', true);
+  }catch(err){ flash(err.message, false); }
+};
+window.atpDelete = async function(rel){
+  if(!confirm('Delete ' + rel + '?')) return;
+  try{ await api(base + '/file?path=' + encodeURIComponent(rel), {method:'DELETE'}); flash('Deleted ' + rel, true); load(currentPath); }
+  catch(err){ flash(err.message, false); }
+};
+document.getElementById('fDir').addEventListener('change', e => { if(e.target.value !== '') load(e.target.value); });
+document.getElementById('btnRefresh').addEventListener('click', () => load(currentPath));
+document.getElementById('btnCreate').addEventListener('click', async () => {
+  if(!fPath.value.trim()){ flash('path is required', false); return; }
+  try{
+    await api(base + '/file', {method:'POST', body:{path:fPath.value.trim(), content:fContent.value, encrypt:fEnc.checked, overwrite:fOver.checked}});
+    flash('Wrote ' + fPath.value.trim(), true); fPath.value=''; fContent.value=''; fOver.checked=false; load(currentPath);
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnUpload').addEventListener('click', async () => {
+  const file = fUpload.files[0];
+  if(!file){ flash('choose a file first', false); return; }
+  const fd = new FormData();
+  fd.append('dir', currentPath);
+  fd.append('encrypt', fEnc.checked ? 'true' : 'false');
+  fd.append('files', file);
+  try{
+    await api(base + '/upload', {method:'POST', body:fd});
+    flash('Uploaded ' + file.name, true); load(currentPath);
+  }catch(err){ flash(err.message, false); }
+});
+load('');
+</script>
+{{end}}

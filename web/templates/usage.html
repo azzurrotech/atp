@@ -1,0 +1,79 @@
+{{define "content"}}
+<div id="msg" class="msg"></div>
+<h1>Usage · {{.ClientID}}</h1>
+<p class="muted">Every request in this client's silo space is logged with its
+on-the-wire size and counted against the hourly silo size. Logs are deleted
+after the retention window (default 24&nbsp;h); billing uses the <b>average
+hourly silo size</b> in GB at the client's rate.</p>
+<div class="tabs">
+  <a href="/clients/{{.ClientID}}">Dashboard</a>
+  <a href="/clients/{{.ClientID}}/files">Files</a>
+  <a href="/clients/{{.ClientID}}/tables">Tables</a>
+  <a href="/clients/{{.ClientID}}/security">Security</a>
+  <a href="/clients/{{.ClientID}}/usage" class="on">Usage</a>
+  <a href="/clients/{{.ClientID}}/secrets">Secrets</a>
+</div>
+
+<div class="grid">
+  <div class="card"><h3>Current silo</h3><div class="big" id="uNow">–</div><div class="sub">song + pod on disk</div></div>
+  <div class="card"><h3>Avg hourly size</h3><div class="big" id="uAvg">–</div><div class="sub" id="uHours">–</div></div>
+  <div class="card"><h3>Bill (retained)</h3><div class="big" id="uCost">–</div><div class="sub" id="uRate">–</div></div>
+  <div class="card"><h3>Request volume</h3><div class="big" id="uReq">–</div><div class="sub" id="uBytes">–</div></div>
+</div>
+
+<h2>Hourly rollup (silo size vs request bytes)</h2>
+<table>
+  <thead><tr><th>Hour (UTC)</th><th>Silo size</th><th>GB·h cost</th><th>Requests</th><th>Request bytes</th><th>Response bytes</th></tr></thead>
+  <tbody id="uHourly"><tr><td class="muted" colspan="6">loading…</td></tr></tbody>
+</table>
+
+<h2>Recent request log</h2>
+<p class="muted">Retention: <span id="uRet">–</span></p>
+<table>
+  <thead><tr><th>Time (UTC)</th><th>Method</th><th>Path</th><th>Status</th><th>Req</th><th>Resp</th><th>ms</th><th>IP</th></tr></thead>
+  <tbody id="uLogs"><tr><td class="muted" colspan="8">loading…</td></tr></tbody>
+</table>
+
+<script>
+(async function(){
+  try{
+    const [b, hourly, logs] = await Promise.all([
+      api('/api/clients/{{.ClientID}}/billing'),
+      api('/api/clients/{{.ClientID}}/usage/hourly'),
+      api('/api/clients/{{.ClientID}}/usage?limit=200')
+    ]);
+    document.getElementById('uNow').textContent = gb(b.current_silo_gb * 1073741824);
+    document.getElementById('uAvg').textContent = gb(b.avg_silo_bytes);
+    const h2 = document.getElementById('uHours');
+    h2.textContent = b.hours + ' hours (' + b.sampled_hours + ' sampled) · ' + (b.chargeable ? 'chargeable' : 'not chargeable');
+    document.getElementById('uCost').textContent = usd(b.total_cost);
+    document.getElementById('uRate').textContent = usd(b.price_per_gb_hour) + '/GB·h';
+    document.getElementById('uReq').textContent = b.total_requests;
+    document.getElementById('uBytes').textContent = (b.total_req_bytes + b.total_resp_bytes) + ' B in/out';
+
+    const rh = document.getElementById('uHourly');
+    if(!hourly.hourly.length){ rh.innerHTML = '<tr><td class="muted" colspan="6">no hourly samples yet — they appear shortly after each hour flips</td></tr>'; }
+    else rh.innerHTML = hourly.hourly.map(x =>
+      '<tr><td class="mono">' + esc(x.hour) + '</td>' +
+      '<td class="mono">' + gb(x.silo_bytes || 0) + (x.sampled ? '' : ' <span class="pill mut">no sample</span>') + '</td>' +
+      '<td class="mono">' + usd((x.silo_bytes||0)/1073741824 * b.price_per_gb_hour * (b.chargeable ? 1 : 0)) + '</td>' +
+      '<td>' + x.requests + '</td>' +
+      '<td class="mono">' + (x.req_bytes||0) + '</td>' +
+      '<td class="mono">' + (x.resp_bytes||0) + '</td></tr>').join('');
+
+    document.getElementById('uRet').textContent = logs.retention_hours + ' h';
+    const rl = document.getElementById('uLogs');
+    if(!logs.records.length){ rl.innerHTML = '<tr><td class="muted" colspan="8">no logged requests yet — open the hosted site at <a href="/c/{{.ClientID}}/">/c/{{.ClientID}}/</a></td></tr>'; }
+    else rl.innerHTML = logs.records.map(x =>
+      '<tr><td class="mono muted">' + esc(String(x.time).slice(11,19)) + '</td>' +
+      '<td class="mono">' + esc(x.method) + '</td>' +
+      '<td class="mono">' + esc(x.path) + '</td>' +
+      '<td>' + (x.status < 400 ? '<span class="pill ok">' + x.status + '</span>' : (x.status < 500 ? '<span class="pill warn">' + x.status + '</span>' : '<span class="pill bad">' + x.status + '</span>')) + '</td>' +
+      '<td class="mono">' + x.req_bytes + '</td>' +
+      '<td class="mono">' + x.resp_bytes + '</td>' +
+      '<td class="mono muted">' + x.duration_ms + '</td>' +
+      '<td class="muted">' + esc(x.remote_ip||'') + '</td></tr>').join('');
+  }catch(err){ flash(err.message, false); }
+})();
+</script>
+{{end}}

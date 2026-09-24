@@ -1,0 +1,49 @@
+{{define "content"}}
+<div id="msg" class="msg"></div>
+<h1>Clients</h1>
+<p class="muted">Each client gets a song silo (static repo), a pod namespace
+(<code>&lt;id&gt;/…</code> tables) and a shepherd scope (<code>client:&lt;id&gt;</code>),
+provisioned automatically when the client is created.</p>
+
+<h2>New client</h2>
+<div class="card">
+  <div class="row">
+    <div><label>ID (web-safe, becomes the silo name)</label><input id="nid" placeholder="acme" pattern="[A-Za-z0-9][A-Za-z0-9._-]*" required></div>
+    <div><label>Display name</label><input id="nname" placeholder="Acme Inc."></div>
+    <div><label>Notes</label><input id="nnotes" placeholder="optional"></div>
+    <button id="btnCreate">Create client</button>
+  </div>
+</div>
+
+<h2>All clients</h2>
+<table>
+  <thead><tr><th>ID</th><th>Name</th><th>Created</th><th>Chargeable</th><th>$/GB·h</th><th>Retention</th><th></th></tr></thead>
+  <tbody id="rows"><tr><td class="muted" colspan="7">loading…</td></tr></tbody>
+</table>
+
+<script>
+async function load(){
+  const d = await api('/api/summary');
+  const rows = document.getElementById('rows');
+  if(!d.clients.length){ rows.innerHTML = '<tr><td class="muted" colspan="7">No clients.</td></tr>'; return; }
+  rows.innerHTML = d.clients.map(c => '<tr>' +
+    '<td class="mono"><a href="/clients/' + esc(c.id) + '"><b>' + esc(c.id) + '</b></a></td>' +
+    '<td>' + esc(c.name) + (c.disabled ? ' <span class="pill bad">disabled</span>' : '') + '</td>' +
+    '<td class="muted">' + esc(String(c.created).slice(0,10)) + '</td>' +
+    '<td>' + (c.chargeable ? '<span class="pill ok">on</span>' : '<span class="pill mut">off</span>') + '</td>' +
+    '<td class="mono">' + usd(c.price_per_gb_hour) + '</td>' +
+    '<td>' + c.retention_hours + 'h</td>' +
+    '<td><a href="/clients/' + esc(c.id) + '" class="btn sm" style="padding:3px 10px">open</a></td>' +
+    '</tr>').join('');
+}
+document.getElementById('btnCreate').addEventListener('click', async () => {
+  try{
+    const d = await api('/api/clients', {method:'POST', body:{id:nid.value.trim(), name:nname.value.trim(), notes:nnotes.value.trim()}});
+    flash('Client ' + d.client.id + ' created', true);
+    nid.value=''; nname.value=''; nnotes.value='';
+    load();
+  }catch(err){ flash(err.message, false); }
+});
+load();
+</script>
+{{end}}

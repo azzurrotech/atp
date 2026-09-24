@@ -1,0 +1,104 @@
+{{define "content"}}
+<div id="msg" class="msg"></div>
+<h1>Tables · {{.ClientID}}</h1>
+<p class="muted">Filesystem XML database managed by <b>pod</b>. This client's
+tables live under <code>{{.ClientID}}/…</code> and are returned as XML or JSON.</p>
+<div class="tabs">
+  <a href="/clients/{{.ClientID}}">Dashboard</a>
+  <a href="/clients/{{.ClientID}}/files">Files</a>
+  <a href="/clients/{{.ClientID}}/tables" class="on">Tables</a>
+  <a href="/clients/{{.ClientID}}/security">Security</a>
+  <a href="/clients/{{.ClientID}}/usage">Usage</a>
+  <a href="/clients/{{.ClientID}}/secrets">Secrets</a>
+</div>
+
+<h2>New table</h2>
+<div class="card">
+  <div class="row">
+    <div><label>Table name</label><input id="tName" placeholder="contacts" required></div>
+    <div><label>Columns (comma separated, type:name)</label><input id="tCols" placeholder="text:first_name, text:last_name, email:email"></div>
+    <button id="btnCreateTable">Create table</button>
+  </div>
+</div>
+
+<h2>Tables</h2>
+<table>
+  <thead><tr><th>Table</th><th>Records</th><th></th></tr></thead>
+  <tbody id="tRows"><tr><td class="muted" colspan="3">loading…</td></tr></tbody>
+</table>
+
+<div id="queryPanel" style="display:none">
+  <h2 id="qTitle"></h2>
+  <div class="card">
+    <div class="row">
+      <div><label>Filter (field=value &amp; q=text, limit, orderby)</label>
+        <input id="qFilter" placeholder="q=…&amp;limit=50"></div>
+      <button id="btnQuery" class="sec">Query</button>
+    </div>
+    <div class="row" style="margin-top:10px" id="upsertRow">
+      <div><label>New record (JSON fields)</label><input id="qFields" placeholder='{"title":"hi","body":"world"}'></div>
+      <button id="btnInsert">Insert record</button>
+    </div>
+    <pre class="out" id="qOut">—</pre>
+  </div>
+</div>
+
+<script>
+let currentTable = '';
+const scopeBase = '/c/{{.ClientID}}/api/pod';
+async function loadTables(){
+  const d = await api('/api/clients/{{.ClientID}}/tables');
+  const rows = document.getElementById('tRows');
+  if(!d.tables.length){ rows.innerHTML = '<tr><td class="muted" colspan="3">No tables yet.</td></tr>'; return; }
+  rows.innerHTML = d.tables.map(t =>
+    '<tr><td class="mono"><a href="javascript:openTable(' + JSON.stringify(t.name) + ')">' + esc(t.name) + '</a></td>' +
+    '<td>' + t.count + '</td>' +
+    '<td><button class="sm danger" onclick="dropTable(' + JSON.stringify(t.name) + ')">drop</button></td></tr>').join('');
+}
+window.openTable = async function(name){
+  currentTable = name;
+  document.getElementById('queryPanel').style.display = 'block';
+  document.getElementById('qTitle').textContent = 'Table · ' + name;
+  await runQuery();
+};
+async function runQuery(){
+  const name = currentTable;
+  const filter = qFilter.value.trim();
+  try{
+    const url = scopeBase + '/table/' + name.split('/').map(encodeURIComponent).join('/') + (filter ? '?' + filter : '');
+    const d = await api(url);
+    document.getElementById('qOut').textContent = JSON.stringify(d, null, 2);
+  }catch(err){ flash(err.message, false); }
+}
+window.dropTable = async function(name){
+  if(!confirm('Delete table ' + name + ' and all its records?')) return;
+  try{
+    await api('/api/pod/schema/' + name.split('/').map(encodeURIComponent).join('/') + '?_action=delete', {method:'DELETE'});
+    flash('Dropped ' + name, true); loadTables();
+  }catch(err){ flash(err.message, false); }
+};
+document.getElementById('btnCreateTable').addEventListener('click', async () => {
+  if(!tName.value.trim()){ flash('table name is required', false); return; }
+  const columns = tCols.value.split(',').map(s=>s.trim()).filter(Boolean).map(s => {
+    const i = s.indexOf(':');
+    return i >= 0 ? {type: s.slice(0,i).trim(), name: s.slice(i+1).trim()} : {type:'text', name:s};
+  }).filter(c => c.name);
+  try{
+    await api('/api/pod/tables', {method:'POST', body:{table: '{{.ClientID}}/' + tName.value.trim(), columns}});
+    flash('Table created', true); tName.value=''; tCols.value=''; loadTables();
+  }catch(err){ flash(err.message, false); }
+});
+document.getElementById('btnQuery').addEventListener('click', runQuery);
+document.getElementById('btnInsert').addEventListener('click', async () => {
+  if(!currentTable){ flash('open a table first', false); return; }
+  let fields; try{ fields = JSON.parse(qFields.value || '{}'); }catch(e){ flash('record must be JSON', false); return; }
+  try{
+    const url = scopeBase + '/table/' + currentTable.split('/').map(encodeURIComponent).join('/');
+    const d = await api(url, {method:'POST', body:fields});
+    document.getElementById('qOut').textContent = JSON.stringify(d, null, 2);
+    qFields.value = ''; flash('Record ' + (d.created ? 'created' : 'updated') + ' ' + d.id, true);
+  }catch(err){ flash(err.message, false); }
+});
+loadTables();
+</script>
+{{end}}

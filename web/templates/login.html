@@ -1,0 +1,27 @@
+{{define "content"}}
+<div class="login">
+  <div class="card">
+    <h1 style="margin-top:0">AzzurroTech Platform</h1>
+    <p class="muted">Admin sign-in. Standard-library only: the password is salted
+    and iterated SHA-256, and sessions are random tokens held server-side.</p>
+    <div id="msg" class="msg"></div>
+    <form id="f" onsubmit="return doLogin(event)">
+      <label>Username</label>
+      <input id="user" name="user" autocomplete="username" value="{{.UserName}}" required>
+      <label>Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <div style="margin-top:16px"><button type="submit" style="width:100%">Sign in</button></div>
+    </form>
+  </div>
+</div>
+<script>
+async function doLogin(ev){
+  ev.preventDefault();
+  try{
+    const data = await api('/login', {method:'POST', body:{user:user.value, password:password.value}});
+    location.href = '/';
+  }catch(err){ flash(err.message, false); }
+  return false;
+}
+</script>
+{{end}}

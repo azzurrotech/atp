@@ -1,0 +1,9 @@
+[submodule "song"]
+	path = song
+	url = https://github.com/azzurrotech/song.git
+[submodule "pod"]
+	path = pod
+	url = https://github.com/azzurrotech/pod.git
+[submodule "shepherd"]
+	path = shepherd
+	url = https://github.com/azzurrotech/shepherd.git

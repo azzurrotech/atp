@@ -24,8 +24,8 @@ func main() {
 
 func run() error {
 	var (
-		port  = flag.String("port", envOr("ATP_PORT", "8080"), "HTTP listen port")
-		root  = flag.String("root", envOr("ATP_ROOT", "./data"), "data root (clients, secrets, logs, song + pod stores)")
+		port   = flag.String("port", envOr("ATP_PORT", "8080"), "HTTP listen port")
+		root   = flag.String("root", envOr("ATP_ROOT", "./data"), "data root (clients, secrets, logs, song + pod stores)")
 		secret = flag.String("secret", envOr("ATP_SECRET", ""), "master secret, >= 32 chars (encrypts secrets, signs tokens)")
 		user   = flag.String("admin-user", envOr("ATP_ADMIN_USER", "admin"), "admin username")
 		pass   = flag.String("admin-password", envOr("ATP_ADMIN_PASSWORD", ""), "admin password (defaults to \"admin\" — set this!)")

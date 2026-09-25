@@ -73,6 +73,23 @@ func mustDecode(t *testing.T, rec *httptest.ResponseRecorder, v any) {
 	}
 }
 
+func TestMiddlewareOwnsOnlyCompletePathSegments(t *testing.T) {
+	s, _ := newTestService(t)
+	for _, p := range []string{"/api", "/api/", "/api/summary", "/health", "/login", "/c/acme/"} {
+		if !s.ownsPath(p) {
+			t.Errorf("ownsPath(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"/healthcheck", "/login-page", "/logout-help", "/apiary", "/clientsx", "/c"} {
+		// /c is reserved as a root, but /c alone is intentionally handled as
+		// a boundary route by the host dispatcher; ATP still owns it.
+		want := p == "/c"
+		if got := s.ownsPath(p); got != want {
+			t.Errorf("ownsPath(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
 func TestHealth(t *testing.T) {
 	s, _ := newTestService(t)
 	rec := doJSON(t, s.Handler(), "GET", "/health", "", nil)
@@ -197,10 +214,19 @@ func TestPublicClientWebApp(t *testing.T) {
 		t.Fatalf("cross-silo access must be forbidden, got %d", rec.Code)
 	}
 
-	// Non-existent client 404s.
-	rec = doJSON(t, s.Handler(), "GET", "/c/nope/", "", nil)
+	// Disabled clients are not publicly reachable, even though their silo files
+	// remain on disk for an operator to inspect or restore.
+	rec = doJSON(t, s.Handler(), "PUT", "/api/clients/acme", `{"disabled":true}`, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable client: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, s.Handler(), "GET", "/c/acme/", "", nil)
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("unknown client site: %d", rec.Code)
+		t.Fatalf("disabled client site: got %d, want 404", rec.Code)
+	}
+	rec = doJSON(t, s.Handler(), "GET", "/c/acme/api/pod/table/acme/contacts", "", cookie)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("disabled client pod API: got %d, want 404", rec.Code)
 	}
 }
 
@@ -308,7 +334,7 @@ func TestShepherdKeysScopingAndVerify(t *testing.T) {
 		t.Fatalf("issue key: %d %s", rec.Code, rec.Body.String())
 	}
 	var out struct {
-		Token  string   `json:"token"`
+		Token  string `json:"token"`
 		Claims struct {
 			Scopes []string `json:"scp"`
 		} `json:"claims"`

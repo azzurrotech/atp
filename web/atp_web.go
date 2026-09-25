@@ -152,9 +152,9 @@ func NewATPService(opts Options) (*ATPService, error) {
 
 	// song — siloed static hosting + SSR templates + magic-link auth.
 	sng, err := song.New(song.Config{
-		Root:       store.Join(opts.Root, "song"),
-		Secret:     opts.Secret,
-		DisableUI:  opts.DisableUI,
+		Root:      store.Join(opts.Root, "song"),
+		Secret:    opts.Secret,
+		DisableUI: opts.DisableUI,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("atp: song: %w", err)
@@ -238,7 +238,11 @@ func (s *ATPService) Middleware(next http.Handler) http.Handler {
 
 func (s *ATPService) ownsPath(p string) bool {
 	for _, prefix := range reservedRoutePrefixes {
-		if p == prefix[:len(prefix)-1] || strings.HasPrefix(p, prefix) {
+		// Match a complete path segment. Raw prefix matching would make
+		// /healthcheck, /login-page, and /logout-help ATP endpoints instead
+		// of ordinary static-site paths in middleware mode.
+		base := strings.TrimSuffix(prefix, "/")
+		if p == base || strings.HasPrefix(p, base+"/") {
 			return true
 		}
 	}
@@ -255,18 +259,26 @@ func (s *ATPService) Start() error {
 	if s.cfg.AdminPassword == "admin" {
 		log.Printf("  WARNING: using the default admin password — set -admin-password / ATP_ADMIN_PASSWORD")
 	}
-	return http.ListenAndServe(addr, s.handler)
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           s.handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
 // Accessors used by the UI and by external hosts embedding atp.
-func (s *ATPService) Clients() *store.ClientStore  { return s.clients }
-func (s *ATPService) Vault() *store.SecretsVault   { return s.vault }
-func (s *ATPService) Usage() *store.UsageStore     { return s.usage }
-func (s *ATPService) Logs() *store.LogStore        { return s.logs }
-func (s *ATPService) Auth() *auth.Manager          { return s.users }
-func (s *ATPService) Song() *song.Song             { return s.song }
-func (s *ATPService) Pod() *pod.Handler            { return s.pod }
-func (s *ATPService) PodStore() *pod.Store         { return s.pods }
+func (s *ATPService) Clients() *store.ClientStore    { return s.clients }
+func (s *ATPService) Vault() *store.SecretsVault     { return s.vault }
+func (s *ATPService) Usage() *store.UsageStore       { return s.usage }
+func (s *ATPService) Logs() *store.LogStore          { return s.logs }
+func (s *ATPService) Auth() *auth.Manager            { return s.users }
+func (s *ATPService) Song() *song.Song               { return s.song }
+func (s *ATPService) Pod() *pod.Handler              { return s.pod }
+func (s *ATPService) PodStore() *pod.Store           { return s.pods }
 func (s *ATPService) Shepherd() *middleware.Shepherd { return s.sec }
 
 // ---- background maintenance -------------------------------------------------
@@ -701,11 +713,16 @@ func (s *ATPService) handlePodPass(w http.ResponseWriter, r *http.Request) {
 	s.pod.ServeHTTP(w, r)
 }
 
+func (s *ATPService) activeClient(id string) bool {
+	c, err := s.clients.Get(id)
+	return err == nil && !c.Disabled
+}
+
 // handleClientWeb serves a client's hosted web application (their song silo)
 // publicly at /c/{client}/...
 func (s *ATPService) handleClientWeb(w http.ResponseWriter, r *http.Request) {
 	id := pathValue(r, "client")
-	if !s.clients.Exists(id) {
+	if !s.activeClient(id) {
 		http.NotFound(w, r)
 		return
 	}
@@ -720,7 +737,7 @@ func (s *ATPService) handleClientWeb(w http.ResponseWriter, r *http.Request) {
 // may only manage its own silo through the API.
 func (s *ATPService) handleClientSongAPI(w http.ResponseWriter, r *http.Request) {
 	id := pathValue(r, "client")
-	if !s.clients.Exists(id) {
+	if !s.activeClient(id) {
 		http.NotFound(w, r)
 		return
 	}
@@ -756,7 +773,7 @@ func (s *ATPService) handleClientSongAPI(w http.ResponseWriter, r *http.Request)
 // only touch tables under <client>/... and never the SQL / admin endpoints.
 func (s *ATPService) handleClientPodAPI(w http.ResponseWriter, r *http.Request) {
 	id := pathValue(r, "client")
-	if !s.clients.Exists(id) {
+	if !s.activeClient(id) {
 		http.NotFound(w, r)
 		return
 	}
@@ -858,9 +875,9 @@ func (s *ATPService) handleSummary(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":       Version,
-		"uptime_seconds": int64(time.Since(s.started).Seconds()),
-		"clients_total":  len(clients),
+		"version":            Version,
+		"uptime_seconds":     int64(time.Since(s.started).Seconds()),
+		"clients_total":      len(clients),
 		"clients_chargeable": chargeable,
 		"total_silo_bytes":   totalSize,
 		"total_silo_gb":      float64(totalSize) / float64(1024*1024*1024),
@@ -887,7 +904,7 @@ func (s *ATPService) handleServices(w http.ResponseWriter, r *http.Request) {
 
 func (s *ATPService) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings": s.clients.Settings(),
+		"settings":   s.clients.Settings(),
 		"admin_user": s.cfg.AdminUser,
 		"port":       s.cfg.Port,
 	})
@@ -963,12 +980,12 @@ func (s *ATPService) handleGetClient(w http.ResponseWriter, r *http.Request) {
 	size := s.sampleClientSize(id)
 	bill, _ := s.usage.Billing(id)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"client":       c,
-		"silo_bytes":   size,
-		"silo_gb":      float64(size) / float64(1024*1024*1024),
-		"billing":      bill,
-		"silo_url":     "/c/" + id + "/",
-		"tables":       s.clientTableList(id),
+		"client":     c,
+		"silo_bytes": size,
+		"silo_gb":    float64(size) / float64(1024*1024*1024),
+		"billing":    bill,
+		"silo_url":   "/c/" + id + "/",
+		"tables":     s.clientTableList(id),
 	})
 }
 
@@ -1284,13 +1301,13 @@ func (s *ATPService) handleClientMagicLink(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	raw, claims, err := s.sec.Manager().IssueMagicLink(token.IssueOptions{
-		Subject: req.Subject,
-		Scopes:  clientScopes(id, req.Scopes),
-		Roles:   req.Roles,
+		Subject:  req.Subject,
+		Scopes:   clientScopes(id, req.Scopes),
+		Roles:    req.Roles,
 		Audience: req.Audience,
-		TTL:     ttl,
-		Next:    req.Next,
-		Meta:    req.Meta,
+		TTL:      ttl,
+		Next:     req.Next,
+		Meta:     req.Meta,
 	})
 	if err != nil {
 		writeErrJSON(w, http.StatusInternalServerError, err.Error())

@@ -468,6 +468,10 @@ type recorder struct {
 	body   strings.Builder
 }
 
-func (r *recorder) Header() http.Header         { return http.Header{} }
-func (r *recorder) WriteHeader(status int)      { if r.status == 0 { r.status = status } }
+func (r *recorder) Header() http.Header { return http.Header{} }
+func (r *recorder) WriteHeader(status int) {
+	if r.status == 0 {
+		r.status = status
+	}
+}
 func (r *recorder) Write(b []byte) (int, error) { return r.body.Write(b) }

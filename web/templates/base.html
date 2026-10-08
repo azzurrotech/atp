@@ -108,7 +108,7 @@ async function api(path, opts){
 }
 function esc(s){
   return String(s).replace(/[&<>"']/g, function(c) {
-    return {"&":"&","<":"<",">":">","\"":""","'":"'"}[c];
+    return {"&":"&","<":"<",">":">","\"":"\"","'":"'"}[c];
   });
 }
 function gb(n){ return (n / 1073741824).toFixed(4) + " GB"; }

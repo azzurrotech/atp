@@ -28,7 +28,7 @@ web platform (`fetch`, `localStorage`, standard cookies).
 | **song** | siloed static-file hosting, server-side template routes, magic-link auth | `/api/song`, `/api/auth`, client web apps at `/c/{client}/` |
 | **pod** | filesystem XML database (HTML-form driven), XML/JSON responses | `/api/pod`, client-scoped tables at `/c/{client}/api/pod/...` |
 | **shepherd** | zero-knowledge key/token issuance, blocks, magic links, firewall, rate limiter, upstream gateway | `/api/shepherd`, `/gw/` |
-| **atp** | clients, secrets, usage/logs, billing, admin UI | `/` (UI), `/api/...`, `/c/{client}/...` |
+| **atp** | clients, secrets, usage/logs, billing, admin UI, session management | `/` (UI), `/api/...`, `/c/{client}/...`, `/sessions` |
 
 song, pod and shepherd are submodules of atp and are **embedded in-process**, not
 proxied. Every feature of the three services is reachable either through atp's
@@ -120,6 +120,14 @@ HTML + vanilla JS; every screen talks to the JSON API below.
 | Client security (shepherd) | `/clients/{id}/security` |
 | Client usage & billing | `/clients/{id}/usage` |
 | Client secrets | `/clients/{id}/secrets` |
+| **Session management** | `/sessions` |
+
+**Session features:**
+- **Remember me** — 30-day session via `remember=true` on login
+- **Session listing** — `GET /api/sessions` shows all active sessions with expiry
+- **Revoke specific session** — `POST /api/sessions/revoke`
+- **Logout everywhere else** — `POST /api/sessions/revoke-all` keeps current session
+- **Expiry warning** — Toast notification 5 minutes before session expiry with "Extend session" link
 
 ---
 
@@ -134,10 +142,13 @@ session cookie. Public surfaces: `/health`, `/login`, `/logout`, `/c/{client}/..
 | Endpoint | Description |
 |---|---|
 | `GET /health` | liveness + embedded service summary (public) |
-| `POST /login` `POST /logout` | admin session (public) |
+| `POST /login` `POST /logout` | admin session (public); `remember=true` for 30-day session |
 | `GET /api/summary` | dashboard numbers: clients, silo bytes, services |
 | `GET /api/services` | embedded service mounts and status |
 | `GET/PUT /api/config` | platform settings (default price, retention, upload cap) |
+| `GET /api/sessions` | list active sessions (expiry, current marker) |
+| `POST /api/sessions/revoke` | revoke a specific session by token |
+| `POST /api/sessions/revoke-all` | revoke all other sessions (keep current) |
 
 ### Clients
 

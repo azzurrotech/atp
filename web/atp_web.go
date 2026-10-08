@@ -1417,8 +1417,13 @@ func (s *ATPService) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
 		if err := r.ParseForm(); err == nil {
 			user, pass := r.FormValue("user"), r.FormValue("password")
-			if tok, err := s.users.Login(user, pass); err == nil {
-				s.setSessionCookie(w, tok)
+			remember := r.FormValue("remember") == "1" || r.FormValue("remember") == "true"
+			ttl := auth.DefaultTTL
+			if remember {
+				ttl = auth.RememberTTL
+			}
+			if tok, err := s.users.LoginWithTTL(user, pass, ttl); err == nil {
+				s.setSessionCookie(w, tok, ttl)
 				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "token": tok})
 				return
 			}
@@ -1429,28 +1434,33 @@ func (s *ATPService) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		User     string `json:"user"`
 		Password string `json:"password"`
+		Remember bool   `json:"remember"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErrJSON(w, http.StatusBadRequest, "invalid body: "+err.Error())
 		return
 	}
-	tok, err := s.users.Login(req.User, req.Password)
+	ttl := auth.DefaultTTL
+	if req.Remember {
+		ttl = auth.RememberTTL
+	}
+	tok, err := s.users.LoginWithTTL(req.User, req.Password, ttl)
 	if err != nil {
 		writeErrJSON(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	s.setSessionCookie(w, tok)
+	s.setSessionCookie(w, tok, ttl)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "token": tok})
 }
 
-func (s *ATPService) setSessionCookie(w http.ResponseWriter, tok string) {
+func (s *ATPService) setSessionCookie(w http.ResponseWriter, tok string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    tok,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(auth.DefaultTTL.Seconds()),
+		MaxAge:   int(ttl.Seconds()),
 	})
 }
 

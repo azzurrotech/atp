@@ -16,6 +16,9 @@ import (
 // DefaultTTL is how long an admin session lives.
 const DefaultTTL = 12 * time.Hour
 
+// RememberTTL is how long a "remember me" session lives (30 days).
+const RememberTTL = 30 * 24 * time.Hour
+
 // hashIterations stretches SHA-256 to slow brute force a little. 100k rounds
 // stays instant on modern hardware while being far costlier than one round.
 const hashIterations = 100_000
@@ -67,6 +70,11 @@ func (m *Manager) Verify(user, password string) bool {
 
 // Login starts a session and returns its token.
 func (m *Manager) Login(user, password string) (string, error) {
+	return m.LoginWithTTL(user, password, m.ttl)
+}
+
+// LoginWithTTL starts a session with a custom TTL and returns its token.
+func (m *Manager) LoginWithTTL(user, password string, ttl time.Duration) (string, error) {
 	if !m.Verify(user, password) {
 		return "", ErrUnauthorized
 	}
@@ -78,7 +86,7 @@ func (m *Manager) Login(user, password string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.purgeLocked()
-	m.sessions[token] = time.Now().Add(m.ttl)
+	m.sessions[token] = time.Now().Add(ttl)
 	return token, nil
 }
 

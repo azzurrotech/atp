@@ -115,6 +115,47 @@ func (m *Manager) Count() int {
 	return len(m.sessions)
 }
 
+// SessionInfo represents an active session.
+type SessionInfo struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	IsCurrent bool      `json:"is_current"`
+}
+
+// ListSessions returns all active sessions with their expiry times.
+func (m *Manager) ListSessions() []SessionInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.purgeLocked()
+	out := make([]SessionInfo, 0, len(m.sessions))
+	for token, exp := range m.sessions {
+		out = append(out, SessionInfo{
+			Token:     token,
+			ExpiresAt: exp,
+		})
+	}
+	return out
+}
+
+// RevokeAll revokes all sessions.
+func (m *Manager) RevokeAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions = map[string]time.Time{}
+}
+
+// RevokeOthers revokes all sessions except the current one.
+func (m *Manager) RevokeOthers(currentToken string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.purgeLocked()
+	for token := range m.sessions {
+		if token != currentToken {
+			delete(m.sessions, token)
+		}
+	}
+}
+
 func (m *Manager) purgeLocked() {
 	now := time.Now()
 	for t, exp := range m.sessions {

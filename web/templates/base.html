@@ -54,14 +54,48 @@ pre.out{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
 .badge.up{background:var(--ok)}.badge.down{background:var(--bad)}
 .muted{color:var(--mut);font-size:13px}
 @media(max-width:640px){.wrap{padding:0 12px 60px}}
+
+/* Toast styles */
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  transform: translateX(120%);
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  pointer-events: auto;
+  min-width: 280px;
+  max-width: 100%;
+}
+.toast-show { transform: translateX(0); opacity: 1; }
+.toast-ok { border-left: 4px solid var(--ok); }
+.toast-err { border-left: 4px solid var(--bad); }
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--mut);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+.toast-close:hover { color: var(--ink); }
 </style>
 </head>
 <body>
 {{if ne .Active "login"}}
 <nav class="top"><div class="wrap">
-  <span class="brand">ATP<span class="muted"> · AzzurroTech Platform</span></span>
+  <span class="brand">ATP<span class="muted"> \xB7 AzzurroTech Platform</span></span>
   <a href="/" class="{{if eq .Active "dashboard"}}on{{end}}">Overview</a>
   <a href="/clients" class="{{if eq .Active "clients"}}on{{end}}">Clients</a>
+  <a href="/sessions" class="{{if eq .Active "sessions"}}on{{end}}">Sessions</a>
   {{if .ClientID}}
   <span class="sp muted" style="padding:0 8px"></span>
   <a href="/clients/{{.ClientID}}" class="{{if eq .Active "client"}}on{{end}}">{{.ClientID}}</a>
@@ -70,7 +104,7 @@ pre.out{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
   <a href="/clients/{{.ClientID}}/security" class="{{if eq .Active "security"}}on{{end}}">Security</a>
   <a href="/clients/{{.ClientID}}/usage" class="{{if eq .Active "usage"}}on{{end}}">Usage</a>
   <a href="/clients/{{.ClientID}}/secrets" class="{{if eq .Active "secrets"}}on{{end}}">Secrets</a>
-  <a href="/c/{{.ClientID}}/" target="_blank" title="open the client's hosted web app">🌐 site</a>
+  <a href="/c/{{.ClientID}}/" target="_blank" title="open the client's hosted web app">\uD83C\uDF10 site</a>
   {{end}}
   <span class="sp"></span>
   <span class="muted" style="padding:0 12px">{{.UserName}}</span>
@@ -84,33 +118,166 @@ pre.out{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
 // Shared helpers. API calls use credentials (session cookie).
 async function api(path, opts){
   opts = opts || {};
-  opts.headers = Object.assign({'Accept':'application/json'}, opts.headers||{});
+  opts.headers = Object.assign({"Accept":"application/json"}, opts.headers||{});
   if(opts.body && !(opts.body instanceof FormData)){
-    opts.headers['Content-Type'] = 'application/json';
-    if(typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
+    opts.headers["Content-Type"] = "application/json";
+    if(typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
   }
   const res = await fetch(path, opts);
   let data = null;
   try { data = await res.json(); } catch(e){}
   if(!res.ok){
-    const msg = (data && data.error) ? data.error : ('HTTP ' + res.status);
+    const msg = (data && data.error) ? data.error : ("HTTP " + res.status);
     const err = new Error(msg); err.status = res.status; err.data = data; throw err;
   }
   return data;
 }
 function esc(s){
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return {"&":"&","<":"<",">":">","\"":""","'":"'"}[c];
+  });
 }
-function gb(n){ return (n / 1073741824).toFixed(4) + ' GB'; }
-function usd(n){ return '$' + (Number(n)||0).toFixed(4); }
-function flash(msg, ok, el){
-  el = el || document.getElementById('msg');
-  if(!el) return;
-  el.textContent = msg;
-  el.className = 'msg show ' + (ok ? 'ok' : 'err');
-  clearTimeout(el._t);
-  el._t = setTimeout(()=>el.className='msg', 6000);
+function gb(n){ return (n / 1073741824).toFixed(4) + " GB"; }
+function usd(n){ return "$" + (Number(n)||0).toFixed(4); }
+
+// Toast/Flash messaging system
+function flash(msg, ok, options) {
+  options = options || {};
+  const container = document.getElementById("toast-container") || createToastContainer();
+  const toast = document.createElement("div");
+  toast.className = "toast " + (ok ? "toast-ok" : "toast-err");
+  toast.setAttribute("role", ok ? "status" : "alert");
+  toast.setAttribute("aria-live", ok ? "polite" : "assertive");
+  toast.textContent = msg;
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "toast-close";
+  closeBtn.setAttribute("aria-label", "Dismiss");
+  closeBtn.innerHTML = "\u00D7";
+  closeBtn.onclick = function() { dismissToast(toast); };
+  toast.appendChild(closeBtn);
+  container.appendChild(toast);
+  requestAnimationFrame(function() { toast.classList.add("toast-show"); });
+  const duration = options.duration || 5000;
+  const timeout = setTimeout(function() { dismissToast(toast); }, duration);
+  toast._dismissTimeout = timeout;
+  return toast;
 }
+function createToastContainer() {
+  const container = document.createElement("div");
+  container.id = "toast-container";
+  container.style.cssText = "position:fixed;bottom:20px;right:20px;z-index:1000;display:flex;flex-direction:column;gap:8px;max-width:360px;pointer-events:none";
+  document.body.appendChild(container);
+  return container;
+}
+function dismissToast(toast) {
+  if (toast._dismissTimeout) clearTimeout(toast._dismissTimeout);
+  toast.classList.remove("toast-show");
+  toast.addEventListener("transitionend", function() { toast.remove(); }, { once: true });
+}
+
+// Button loading state helper
+function setButtonLoading(btn, loading, originalText) {
+  if (loading) {
+    btn._originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = originalText || "Loading...";
+    btn.style.opacity = "0.7";
+    btn.style.cursor = "wait";
+  } else {
+    btn.disabled = false;
+    btn.textContent = btn._originalText || originalText || "Done";
+    btn.style.opacity = "1";
+    btn.style.cursor = "";
+  }
+}
+
+// Copy to clipboard helper
+async function copyToClipboard(text, label) {
+  label = label || "Copied";
+  try {
+    await navigator.clipboard.writeText(text);
+    flash(label, true);
+    return true;
+  } catch (e) {
+    flash("Failed to copy: " + e.message, false);
+    return false;
+  }
+}
+
+// Empty state helper
+function emptyState(message, actionLabel, actionFn) {
+  const div = document.createElement("div");
+  div.className = "empty-state";
+  var html = "<svg width=\"48\" height=\"48\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\" style=\"margin-bottom:12px;color:var(--mut)\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"8\" x2=\"12\" y2=\"12\"/><line x1=\"12\" y1=\"16\" x2=\"12.01\" y2=\"16\"/></svg><p>" + esc(message) + "</p>";
+  if (actionLabel && actionFn) {
+    html += "<button class=\"btn\" onclick=\"" + actionFn + "\">" + esc(actionLabel) + "</button>";
+  }
+  div.innerHTML = html;
+  return div;
+}
+
+// Keyboard shortcuts
+function setupKeyboardShortcuts() {
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".toast").forEach(function(t) { dismissToast(t); });
+      document.querySelectorAll("[role=\"dialog\"]").forEach(function(d) { d.close(); });
+    }
+  });
+}
+
+// Focus management
+function trapFocus(element) {
+  const focusableElements = element.querySelectorAll(
+    "button, [href], input, select, textarea, [tabindex]:not([tabindex=\"-1\"])"
+  );
+  const firstElement = focusableElements[0];
+  const lastElement = focusableElements[focusableElements.length - 1];
+  element.addEventListener("keydown", function(e) {
+    if (e.key === "Tab") {
+      if (e.shiftKey && document.activeElement === firstElement) {
+        e.preventDefault();
+        lastElement.focus();
+      } else if (!e.shiftKey && document.activeElement === lastElement) {
+        e.preventDefault();
+        firstElement.focus();
+      }
+    }
+  });
+}
+
+// Session expiry warning
+function startSessionExpiryWarning() {
+  setInterval(async function() {
+    try {
+      const d = await api("/api/sessions");
+      if (!d.sessions || !d.sessions.length) return;
+      const current = d.sessions.find(function(s) { return s.is_current; });
+      if (!current) return;
+      const expiresAt = new Date(current.expires_at).getTime();
+      const now = Date.now();
+      const remaining = expiresAt - now;
+      if (remaining > 0 && remaining < 5 * 60 * 1000 && !window._expiryWarned) {
+        window._expiryWarned = true;
+        const toast = flash("Your session expires in less than 5 minutes. ", false, { duration: 0 });
+        const link = document.createElement("a");
+        link.href = "/login?next=" + encodeURIComponent(location.pathname);
+        link.style.cssText = "color:var(--acc);text-decoration:underline;margin-left:8px";
+        link.textContent = "Extend session";
+        toast.appendChild(link);
+      }
+      if (remaining <= 0) {
+        window.location.href = "/login?next=" + encodeURIComponent(location.pathname);
+      }
+    } catch (e) {}
+  }, 60000);
+}
+
+// Initialize on DOM ready
+document.addEventListener("DOMContentLoaded", function() {
+  setupKeyboardShortcuts();
+  startSessionExpiryWarning();
+});
 </script>
 </body>
 </html>

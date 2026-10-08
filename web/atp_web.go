@@ -512,6 +512,7 @@ func (s *ATPService) buildHandler() http.Handler {
 	inner.HandleFunc("GET /clients/{id}/security", s.admin(s.handleClientSecurityPage))
 	inner.HandleFunc("GET /clients/{id}/usage", s.admin(s.handleClientUsagePage))
 	inner.HandleFunc("GET /clients/{id}/secrets", s.admin(s.handleClientSecretsPage))
+	inner.HandleFunc("GET /sessions", s.admin(s.handleSessionsPage))
 
 	// Admin: atp JSON API.
 	inner.HandleFunc("GET /api/summary", s.admin(s.handleSummary))
@@ -532,6 +533,10 @@ func (s *ATPService) buildHandler() http.Handler {
 	inner.HandleFunc("GET /api/clients/{id}/usage/hourly", s.admin(s.handleClientHourly))
 	inner.HandleFunc("GET /api/clients/{id}/billing", s.admin(s.handleClientBilling))
 	inner.HandleFunc("POST /api/clients/{id}/keys", s.admin(s.handleClientIssueKey))
+	// Session management API
+	inner.HandleFunc("GET /api/sessions", s.admin(s.handleListSessions))
+	inner.HandleFunc("POST /api/sessions/revoke", s.admin(s.handleRevokeSession))
+	inner.HandleFunc("POST /api/sessions/revoke-all", s.admin(s.handleRevokeAllSessions))
 	inner.HandleFunc("POST /api/clients/{id}/keys/block", s.admin(s.handleClientIssueBlock))
 	inner.HandleFunc("POST /api/clients/{id}/keys/magic", s.admin(s.handleClientMagicLink))
 	inner.HandleFunc("POST /api/clients/{id}/revoke", s.admin(s.handleClientRevoke))
@@ -1455,6 +1460,57 @@ func (s *ATPService) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+// ---- session management --------------------------------------------------------
+
+func (s *ATPService) handleSessionsPage(w http.ResponseWriter, r *http.Request) {
+	s.renderPage(w, r, "sessions", map[string]any{
+		"Title":    "ATP — Active Sessions",
+		"Active":   "sessions",
+		"UserName": s.cfg.AdminUser,
+	})
+}
+
+func (s *ATPService) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	currentToken := s.currentSessionToken(r)
+	sessions := s.users.ListSessions()
+	for i := range sessions {
+		sessions[i].IsCurrent = sessions[i].Token == currentToken
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+func (s *ATPService) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErrJSON(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	currentToken := s.currentSessionToken(r)
+	if req.Token == currentToken {
+		writeErrJSON(w, http.StatusBadRequest, "cannot revoke current session; use logout")
+		return
+	}
+	s.users.Logout(req.Token)
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": req.Token})
+}
+
+func (s *ATPService) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request) {
+	currentToken := s.currentSessionToken(r)
+	s.users.RevokeOthers(currentToken)
+	// Also clear the cookie for the current session since we're logging out everywhere
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "all other sessions revoked; you are logged out"})
+}
+
+func (s *ATPService) currentSessionToken(r *http.Request) string {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		return c.Value
+	}
+	return r.Header.Get("X-ATP-Token")
 }
 
 // ---- helpers --------------------------------------------------------------------

@@ -191,6 +191,10 @@ func TestPublicClientWebApp(t *testing.T) {
 	cookie := login(t, s.Handler())
 	doJSON(t, s.Handler(), "POST", "/api/clients", `{"id":"acme"}`, cookie)
 
+	// Set base URL for the client's silo (required for file operations)
+	doJSON(t, s.Handler(), "PUT", "/api/song/silos/acme/base-url",
+		`{"base_url": "/c/acme/"}`, cookie)
+
 	// Put a file through the client-scoped song API.
 	rec := doJSON(t, s.Handler(), "POST", "/c/acme/api/song/silos/acme/file",
 		`{"path":"index.html","content":"<h1>hi acme</h1>","overwrite":true}`, cookie)

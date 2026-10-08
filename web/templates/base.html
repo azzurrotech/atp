@@ -88,34 +88,8 @@ pre.out{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
 }
 .toast-close:hover { color: var(--ink); }
 </style>
-</head>
-<body>
-{{if ne .Active "login"}}
-<nav class="top"><div class="wrap">
-  <span class="brand">ATP<span class="muted"> \xB7 AzzurroTech Platform</span></span>
-  <a href="/" class="{{if eq .Active "dashboard"}}on{{end}}">Overview</a>
-  <a href="/clients" class="{{if eq .Active "clients"}}on{{end}}">Clients</a>
-  <a href="/sessions" class="{{if eq .Active "sessions"}}on{{end}}">Sessions</a>
-  {{if .ClientID}}
-  <span class="sp muted" style="padding:0 8px"></span>
-  <a href="/clients/{{.ClientID}}" class="{{if eq .Active "client"}}on{{end}}">{{.ClientID}}</a>
-  <a href="/clients/{{.ClientID}}/files" class="{{if eq .Active "files"}}on{{end}}">Files</a>
-  <a href="/clients/{{.ClientID}}/tables" class="{{if eq .Active "tables"}}on{{end}}">Tables</a>
-  <a href="/clients/{{.ClientID}}/security" class="{{if eq .Active "security"}}on{{end}}">Security</a>
-  <a href="/clients/{{.ClientID}}/usage" class="{{if eq .Active "usage"}}on{{end}}">Usage</a>
-  <a href="/clients/{{.ClientID}}/secrets" class="{{if eq .Active "secrets"}}on{{end}}">Secrets</a>
-  <a href="/c/{{.ClientID}}/" target="_blank" title="open the client's hosted web app">\uD83C\uDF10 site</a>
-  {{end}}
-  <span class="sp"></span>
-  <span class="muted" style="padding:0 12px">{{.UserName}}</span>
-  <form method="post" action="/logout"><button class="sec sm" type="submit">Sign out</button></form>
-</div></nav>
-{{end}}
-<main class="wrap">
-{{template "content" .}}
-</main>
 <script>
-// Shared helpers. API calls use credentials (session cookie).
+// Shared helpers - defined in HEAD so available before content scripts
 async function api(path, opts){
   opts = opts || {};
   opts.headers = Object.assign({"Accept":"application/json"}, opts.headers||{});
@@ -279,6 +253,32 @@ document.addEventListener("DOMContentLoaded", function() {
   startSessionExpiryWarning();
 });
 </script>
+</head>
+<body>
+{{if ne .Active "login"}}
+<nav class="top"><div class="wrap">
+  <span class="brand">ATP<span class="muted"> \xB7 AzzurroTech Platform</span></span>
+  <a href="/" class="{{if eq .Active "dashboard"}}on{{end}}">Overview</a>
+  <a href="/clients" class="{{if eq .Active "clients"}}on{{end}}">Clients</a>
+  <a href="/sessions" class="{{if eq .Active "sessions"}}on{{end}}">Sessions</a>
+  {{if .ClientID}}
+  <span class="sp muted" style="padding:0 8px"></span>
+  <a href="/clients/{{.ClientID}}" class="{{if eq .Active "client"}}on{{end}}">{{.ClientID}}</a>
+  <a href="/clients/{{.ClientID}}/files" class="{{if eq .Active "files"}}on{{end}}">Files</a>
+  <a href="/clients/{{.ClientID}}/tables" class="{{if eq .Active "tables"}}on{{end}}">Tables</a>
+  <a href="/clients/{{.ClientID}}/security" class="{{if eq .Active "security"}}on{{end}}">Security</a>
+  <a href="/clients/{{.ClientID}}/usage" class="{{if eq .Active "usage"}}on{{end}}">Usage</a>
+  <a href="/clients/{{.ClientID}}/secrets" class="{{if eq .Active "secrets"}}on{{end}}">Secrets</a>
+  <a href="/c/{{.ClientID}}/" target="_blank" title="open the client's hosted web app">\uD83C\uDF10 site</a>
+  {{end}}
+  <span class="sp"></span>
+  <span class="muted" style="padding:0 12px">{{.UserName}}</span>
+  <form method="post" action="/logout"><button class="sec sm" type="submit">Sign out</button></form>
+</div></nav>
+{{end}}
+<main class="wrap">
+{{template "content" .}}
+</main>
 </body>
 </html>
 {{end}}

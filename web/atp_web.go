@@ -77,6 +77,10 @@ type Options struct {
 	// DefaultRatePerMinute / Burst configure the embedded rate limiter.
 	DefaultRatePerMinute float64
 	Burst                float64
+	// PublicBase is the public base URL for the atp server (e.g., "http://localhost:8080").
+	// If empty, silos use relative paths "/c/{silo}/".
+	// When set, silos get absolute base URLs like "http://localhost:8080/c/{silo}/".
+	PublicBase string
 }
 
 // ATPService is a configured atp orchestrator.
@@ -152,9 +156,10 @@ func NewATPService(opts Options) (*ATPService, error) {
 
 	// song — siloed static hosting + SSR templates + magic-link auth.
 	sng, err := song.New(song.Config{
-		Root:      store.Join(opts.Root, "song"),
-		Secret:    opts.Secret,
-		DisableUI: opts.DisableUI,
+		Root:       store.Join(opts.Root, "song"),
+		Secret:     opts.Secret,
+		DisableUI:  opts.DisableUI,
+		PublicBase: opts.PublicBase,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("atp: song: %w", err)

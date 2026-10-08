@@ -4,24 +4,132 @@
     <h1 style="margin-top:0">AzzurroTech Platform</h1>
     <p class="muted">Admin sign-in. Standard-library only: the password is salted
     and iterated SHA-256, and sessions are random tokens held server-side.</p>
-    <div id="msg" class="msg"></div>
-    <form id="f" onsubmit="return doLogin(event)">
-      <label>Username</label>
-      <input id="user" name="user" autocomplete="username" value="{{.UserName}}" required>
-      <label>Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <div style="margin-top:16px"><button type="submit" style="width:100%">Sign in</button></div>
+    <div id="msg" class="msg" role="alert" aria-live="polite"></div>
+    <form id="f" onsubmit="return doLogin(event)" novalidate>
+      <div class="form-group">
+        <label for="user">Username</label>
+        <input id="user" name="user" type="text" autocomplete="username" value="{{.UserName}}" required autofocus aria-describedby="user-hint">
+        <span id="user-hint" class="muted" style="display:block;margin-top:4px;font-size:12px">Default: <code>admin</code></span>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <div class="password-wrapper">
+          <input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="pass-hint">
+          <button type="button" class="btn-toggle" id="togglePass" aria-label="Show password" aria-pressed="false" tabindex="-1">
+            <svg id="eyeOpen" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg id="eyeClosed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          </button>
+        </div>
+        <span id="pass-hint" class="muted" style="display:block;margin-top:4px;font-size:12px">Default: <code>admin</code> (change with <code>-admin-password</code> or <code>ATP_ADMIN_PASSWORD</code>)</span>
+      </div>
+      <div class="form-group checkbox-group">
+        <label class="checkbox-label">
+          <input type="checkbox" id="remember" name="remember" value="1">
+          <span class="checkbox-text">Remember me (30 days)</span>
+        </label>
+      </div>
+      <div style="margin-top:16px">
+        <button type="submit" id="btnSubmit" style="width:100%">Sign in</button>
+      </div>
     </form>
+    <p class="muted" style="margin-top:20px;font-size:13px;text-align:center">
+      <kbd style="background:var(--panel2);border:1px solid var(--line);padding:2px 6px;border-radius:4px">Enter</kbd> to submit &middot; 
+      <kbd style="background:var(--panel2);border:1px solid var(--line);padding:2px 6px;border-radius:4px">Tab</kbd> to navigate
+    </p>
   </div>
 </div>
 <script>
-async function doLogin(ev){
+// Password visibility toggle
+const toggleBtn = document.getElementById('togglePass');
+const passInput = document.getElementById('password');
+const eyeOpen = document.getElementById('eyeOpen');
+const eyeClosed = document.getElementById('eyeClosed');
+
+toggleBtn.addEventListener('click', function() {
+  const isPassword = passInput.type === 'password';
+  passInput.type = isPassword ? 'text' : 'password';
+  toggleBtn.setAttribute('aria-pressed', isPassword);
+  eyeOpen.style.display = isPassword ? 'none' : 'block';
+  eyeClosed.style.display = isPassword ? 'block' : 'none';
+});
+
+// Handle login with redirect preservation and remember me
+async function doLogin(ev) {
   ev.preventDefault();
-  try{
-    const data = await api('/login', {method:'POST', body:{user:user.value, password:password.value}});
-    location.href = '/';
-  }catch(err){ flash(err.message, false); }
+  const btn = document.getElementById('btnSubmit');
+  const user = document.getElementById('user').value.trim();
+  const password = document.getElementById('password').value;
+  const remember = document.getElementById('remember').checked;
+  
+  if (!user || !password) {
+    flash('Please enter both username and password', false);
+    return false;
+  }
+
+  // Show loading state
+  setButtonLoading(btn, true, 'Signing in...');
+
+  try {
+    // Preserve redirect target
+    const params = new URLSearchParams(window.location.search);
+    const redirect = params.get('next') || '/';
+    
+    const body = { user, password };
+    if (remember) body.remember = true;
+    
+    const data = await api('/login', { method: 'POST', body });
+    
+    flash('Welcome back!', true);
+    // Small delay to show success message
+    setTimeout(function() { location.href = redirect; }, 300);
+  } catch (err) {
+    flash(err.message, false);
+  } finally {
+    // Restore button
+    setButtonLoading(btn, false);
+  }
   return false;
 }
+
+// Focus username field on load
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('user').focus();
+});
 </script>
+<style>
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; color: var(--mut); font-size: 13px; margin: 0 0 4px; }
+.password-wrapper { position: relative; }
+.password-wrapper input { padding-right: 48px; }
+.btn-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--mut);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-toggle:hover { color: var(--ink); }
+.checkbox-group { margin-top: 8px; }
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--ink);
+}
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--acc);
+  flex-shrink: 0;
+}
+</style>
 {{end}}

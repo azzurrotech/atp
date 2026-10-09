@@ -29,7 +29,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -1536,13 +1535,4 @@ func randTokenHex(n int) string {
 		return strconv.FormatInt(time.Now().UnixNano(), 16)
 	}
 	return hex.EncodeToString(b)
-}
-
-// mini URL join used in UI links.
-func joinURL(base string, parts ...string) string {
-	p := path.Join(parts...)
-	if p == "." {
-		return base
-	}
-	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(p, "/")
 }

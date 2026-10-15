@@ -5,7 +5,11 @@
 *.so
 *.dylib
 atp.exe
-atp
+# The binary produced by `go build -o atp ./cmd/atp`.
+# Anchored to the repo root on purpose: a bare "atp" pattern also matches the
+# cmd/atp/ source directory, which made git hide cmd/atp/main.go entirely (it was
+# never committed, so a clone from GitHub could not build the server).
+/atp
 atp-executable
 atp-server
 

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -542,6 +543,43 @@ func TestPlatformCapabilityFunctions(t *testing.T) {
 	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"garbage"}`), nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("bad verify should 401, got %d", rec.Code)
+	}
+	// A revoked token has a valid signature but must not verify: the endpoint
+	// has to consult the revocation list, exactly as shepherd's own does. A
+	// second, throwaway token is used so this does not disturb the one above.
+	rec = do(t, srv, "POST", "/api/keys",
+		strings.NewReader(`{"subject":"revoke-me","scopes":["read:orders"],"ttl_seconds":3600}`), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("issue second %d %q", rec.Code, rec.Body.String())
+	}
+	var second map[string]any
+	decode(t, rec, &second)
+	doomed, _ := second["token"].(string)
+	if doomed == "" {
+		t.Fatalf("no second token: %q", rec.Body.String())
+	}
+	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"`+doomed+`"}`), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second verify %d %q", rec.Code, rec.Body.String())
+	}
+	var verified struct {
+		Claims struct {
+			JTI       string `json:"jti"`
+			ExpiresAt int64  `json:"exp"`
+		} `json:"claims"`
+	}
+	decode(t, rec, &verified)
+	if verified.Claims.JTI == "" {
+		t.Fatal("issued token has no jti")
+	}
+	rec = do(t, srv, "POST", "/api/revoke", strings.NewReader(
+		`{"jti":"`+verified.Claims.JTI+`","expires_at":`+strconv.FormatInt(verified.Claims.ExpiresAt, 10)+`}`), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke %d %q", rec.Code, rec.Body.String())
+	}
+	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"`+doomed+`"}`), nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a revoked token must not verify, got %d %q", rec.Code, rec.Body.String())
 	}
 	// provider authenticate with the token
 	rec = do(t, srv, "POST", "/api/provider/authenticate", nil, map[string]string{"Authorization": "Bearer " + raw})

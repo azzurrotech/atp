@@ -351,6 +351,14 @@ func (s *Server) registerCapabilityFunctions() {
 			writeErr(w, http.StatusUnauthorized, err.Error())
 			return
 		}
+		// A revoked token still has a valid signature, so verification has to
+		// consult the revocation list too. Without this the endpoint would
+		// confirm a token the operator has explicitly cancelled — shepherd's
+		// own verify endpoint checks this, and atp must agree with it.
+		if s.shepherd.IsDenied(claims.ID) || (claims.Block != "" && s.shepherd.IsDenied(claims.Block)) {
+			writeErr(w, http.StatusUnauthorized, "token revoked")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"valid": true, "claims": claims})
 	}))
 	must(s.Handle("POST", "/api/revoke", func(w http.ResponseWriter, r *http.Request) {

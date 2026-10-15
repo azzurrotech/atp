@@ -155,7 +155,7 @@ func main() {
 	// The handler receives the platform, so it can read secrets and reach the
 	// embedded services directly.
 	srv.Handle("POST", "/api/charge", func(w http.ResponseWriter, r *http.Request) {
-		key, ok := srv.Secrets().Get("stripe_key")
+		key, ok := srv.Secrets().Get("notes", "stripe_key")
 		if !ok {
 			http.Error(w, "not configured", http.StatusPreconditionFailed)
 			return
@@ -192,7 +192,7 @@ atp has two modes, and they are not exclusive.
 **Server mode** — `go build` produces one binary that serves the whole platform:
 
 ```sh
-go build -o atp .
+go build -o atp ./cmd/atp
 ./atp --addr :8080 --root ./data --secret "$ATP_SECRET"
 ```
 
@@ -322,11 +322,11 @@ below names the web-platform documentation atp implements.
 
 Reference: [Progressive web apps](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps).
 
-- **Web app manifest, generated.** atp serves `/apps/{app}/manifest.webmanifest` from the
+- **Web app manifest, generated.** atp serves `/{app}/manifest.webmanifest` from the
   app's metadata — `name`, `short_name`, `description`, `start_url`, `scope`, `display`,
   `theme_color`, `background_color`, `icons`, `shortcuts`, `share_target` — and injects
   `<link rel="manifest" href="…">` through the head manager.
-- **Service worker, generated.** atp serves `/apps/{app}/sw.js`: it precaches the application
+- **Service worker, generated.** atp serves `/{app}/sw.js`: it precaches the application
   shell (the app's HTML, CSS and JS) and serves it cache-first, while sending functions and
   pod records network-first with an offline fallback. An app that ships its own `sw.js` keeps
   it — atp serves theirs and skips generation.
@@ -341,7 +341,7 @@ Reference: [Progressive web apps](https://developer.mozilla.org/en-US/docs/Web/P
 
 Reference: [OpenSearch description format](https://developer.mozilla.org/en-US/docs/Web/XML/Guides/OpenSearch).
 
-- **Description document, generated.** atp serves `/apps/{app}/opensearch.xml` with
+- **Description document, generated.** atp serves `/{app}/opensearch.xml` with
   `Content-Type: application/opensearchdescription+xml`, carrying `<ShortName>` (16
   characters or fewer), `<Description>`, `<InputEncoding>`, `<Image>`, a
   `<Url type="text/html" template="…?q={searchTerms}">`, an optional
@@ -621,7 +621,7 @@ the platform.
 ## Running locally
 
 ```sh
-go build -o atp .
+go build -o atp ./cmd/atp
 ./atp --addr :8080 --root ./data --secret '0123456789abcdef0123456789abcdef'
 # open http://localhost:8080  (the management view)
 # a hosted application:       http://localhost:8080/notes/
@@ -654,7 +654,7 @@ same way everywhere.
 **As a binary on a host**
 
 ```sh
-CGO_ENABLED=0 go build -o atp .          # or: GOOS=linux GOARCH=amd64 go build -o atp .
+CGO_ENABLED=0 go build -o atp ./cmd/atp          # or: GOOS=linux GOARCH=amd64 go build -o atp ./cmd/atp
 scp atp you@host:/usr/local/bin/atp
 ssh you@host 'ATP_SECRET=… atp --addr :8080 --root /srv/atp/data'
 ```
@@ -678,7 +678,7 @@ COPY song ./song
 COPY pod ./pod
 COPY shepherd ./shepherd
 COPY . .
-RUN CGO_ENABLED=0 go build -o atp-server .
+RUN CGO_ENABLED=0 go build -o atp-server ./cmd/atp
 EXPOSE 8080
 CMD ["/app/atp-server", "--addr", ":8080", "--root", "/app/data"]
 ```
@@ -694,7 +694,19 @@ the header manager.
 ```text
 README.md            this document
 LICENSE              MIT
-.gitmodules          song, pod, shepherd
+go.mod               module azzurrotech/atp (require + replace song/pod/shepherd)
+atp.go               the modified fileserver: Options, New, routing order, accessors
+registry.go          the serverless function registry (Handle/HandleFunc)
+secrets.go           the encrypted secrets vault (Vault) + share links
+head.go              the central head manager
+headers.go           request/response/internal header policy + safe baseline
+inject.go            response buffering (head injection) and gzip
+apps.go              hosted apps + generated manifest/service worker/OpenSearch
+static.go            the encrypted static overlay (StaticBox)
+platform.go          the platform HTTP surface + /api capability functions
+view.go              the management view
+cmd/atp/main.go      the one-binary server
+atp_test.go          the platform's own tests
 song/                submodule — static hosting, templates, Web Components
 pod/                 submodule — form → XML database, uploads, encryption, shares
 shepherd/            submodule — identity-free IAM, firewall, rate limit, gateway
@@ -714,11 +726,11 @@ go vet ./...
 go test ./...
 ```
 
-The behaviour this document specifies is delivered in stages: the launch stage ships this
-specification, the three embedded submodules and the repository scaffolding; the Go packages
-(`atp.New`, the function registry, the secrets vault, the head and header managers, the
-management view) are the contract they implement. Where this document names song, pod or
-shepherd behaviour, those details are already implemented and tested inside the submodules.
+The Go packages this document specifies are implemented: `atp.New` builds the
+platform, the function registry, the secrets vault, the head and header managers, the
+generated client-app capabilities, the management view and the `cmd/atp` binary. Where
+this document names song, pod or shepherd behaviour, those details are implemented and
+tested inside the submodules.
 
 The reference wirings for [how the middleware files are used](#where-the-middleware-files-live-and-how-they-are-used)
 are the modules' own examples: `song/examples/middleware/`, `pod/README.md` and

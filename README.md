@@ -587,6 +587,39 @@ not a network hop.
 
 ---
 
+## Health and readiness
+
+Every atp application can answer "is this deployment wired correctly?" with the same two
+calls, rather than repeating nil checks and probes:
+
+```go
+report := srv.Health() // cheap: which modules are mounted
+report = srv.Check()   // live: exercise each module, clean up after itself
+```
+
+`Health` returns an `atp.HealthReport`:
+
+```go
+type HealthReport struct {
+    Status     string            // "healthy" | "degraded"
+    Version    string
+    Timestamp  time.Time
+    Components []ComponentStatus // name, ok, detail, error
+    Failures   []string
+}
+```
+
+`Check` is `Health` plus a real operation per module: it upserts, reads and deletes a
+disposable pod record (`__atp_health`), lists song's silos, issues and verifies a one-minute
+shepherd token, sets and deletes a disposable vault secret (`__atp_health`), and lists the
+function registry. Nothing it writes survives the call. A host chooses whether to expose the
+report; atp adds no authentication to it.
+
+This is the only definition of "degraded" in the platform, so a new module is covered
+everywhere at once instead of in each application.
+
+---
+
 ## Encrypted static and dynamic content
 
 atp is built so that **both halves of an application can be encrypted at rest**:

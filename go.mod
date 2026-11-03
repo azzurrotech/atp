@@ -8,8 +8,8 @@ require (
 	azzurrotech/song v0.0.0
 )
 
-replace azzurrotech/pod => ./pod
+replace azzurrotech/pod => ../pod
 
-replace azzurrotech/shepherd => ./shepherd
+replace azzurrotech/shepherd => ../shepherd
 
-replace azzurrotech/song => ./song
+replace azzurrotech/song => ../song

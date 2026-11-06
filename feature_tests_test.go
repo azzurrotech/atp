@@ -101,7 +101,7 @@ func TestATP_API_001_FunctionsAPI(t *testing.T) {
 func TestATP_API_002_KeysAPI(t *testing.T) {
 	srv := newServer(t, Options{})
 	rec := do(t, srv, "POST", "/api/keys", bytes.NewBufferString(`{"scopes":["read"]}`), map[string]string{"Content-Type": "application/json"})
-	if rec.Code != 200 && rec.Code != 401 { // may require auth
+	if rec.Code != 200 && rec.Code != 201 && rec.Code != 401 { // shepherd answers 201 on issue
 		t.Fatalf("ATP-API-002: unexpected status %d", rec.Code)
 	}
 }

@@ -88,7 +88,7 @@ func (s *Server) renderView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	silos, _ := s.song.Store().ListSilos()
+	silos := s.listSilos()
 	data := struct {
 		Title      string
 		Version    string

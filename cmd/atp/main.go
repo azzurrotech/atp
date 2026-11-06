@@ -1,7 +1,10 @@
-// Command atp runs the AzzurroTech Platform as one self-contained server: the
-// modified fileserver, the function registry, the secrets vault, the head and
-// header managers, hosted applications, generated client-app capabilities and
-// the in-process song, pod and shepherd modules.
+// Command atp runs the AzzurroTech Platform as one server: the modified
+// fileserver, the function registry, the secrets vault, the head and header
+// managers, hosted applications and generated client-app capabilities.
+//
+// pod, song and shepherd are separate processes. atp reaches them over HTTP at
+// the URLs given by --pod-url, --song-url and --shepherd-url (or the matching
+// ATP_POD_URL, ATP_SONG_URL and ATP_SHEPHERD_URL environment variables).
 package main
 
 import (
@@ -17,14 +20,18 @@ import (
 
 func main() {
 	var (
-		addr     = flag.String("addr", env("ATP_ADDR", ":8080"), "listen address (host:port)")
-		root     = flag.String("root", env("ATP_ROOT", "./data"), "root for hosted apps, stores and the vault")
-		secret   = flag.String("secret", env("ATP_SECRET", ""), "master secret, at least 32 bytes (vault key + token signing)")
-		encrypt  = flag.Bool("encrypt", envBool("ATP_ENCRYPT", false), "encrypt dynamic content at rest")
-		headless = flag.Bool("headless", envBool("ATP_HEADLESS", false), "serve apps/functions without the management view")
-		ipHdr    = flag.String("client-ip-header", env("ATP_CLIENT_IP_HEADER", ""), "trusted proxy client-IP header, e.g. X-Forwarded-For")
-		title    = flag.String("title", env("ATP_TITLE", ""), "default document title")
-		version  = flag.Bool("version", false, "print version and exit")
+		addr      = flag.String("addr", env("ATP_ADDR", ":8080"), "listen address (host:port)")
+		root      = flag.String("root", env("ATP_ROOT", "./data"), "root for hosted apps and the vault")
+		secret    = flag.String("secret", env("ATP_SECRET", ""), "master secret, at least 32 bytes (vault key)")
+		encrypt   = flag.Bool("encrypt", envBool("ATP_ENCRYPT", false), "encrypt dynamic content at rest")
+		headless  = flag.Bool("headless", envBool("ATP_HEADLESS", false), "serve apps/functions without the management view")
+		ipHdr     = flag.String("client-ip-header", env("ATP_CLIENT_IP_HEADER", ""), "trusted proxy client-IP header, e.g. X-Forwarded-For")
+		title     = flag.String("title", env("ATP_TITLE", ""), "default document title")
+		podURL    = flag.String("pod-url", env("ATP_POD_URL", atp.DefaultPodURL), "base URL of the pod service")
+		songURL   = flag.String("song-url", env("ATP_SONG_URL", atp.DefaultSongURL), "base URL of the song service")
+		shepURL   = flag.String("shepherd-url", env("ATP_SHEPHERD_URL", atp.DefaultShepherdURL), "base URL of the shepherd service")
+		shepAdmin = flag.String("shepherd-admin", env("ATP_SHEPHERD_ADMIN", ""), "shepherd admin token (sent as X-Shepherd-Admin)")
+		version   = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -42,6 +49,10 @@ func main() {
 		Headless:       *headless,
 		ClientIPHeader: *ipHdr,
 		Title:          *title,
+		PodURL:         *podURL,
+		SongURL:        *songURL,
+		ShepherdURL:    *shepURL,
+		ShepherdAdmin:  *shepAdmin,
 	})
 	if err != nil {
 		log.Fatalf("atp: %v", err)
@@ -49,6 +60,12 @@ func main() {
 	defer srv.Close()
 
 	log.Printf("atp %s listening on %s (root %s)", atp.Version, srv.Addr(), srv.Root())
+	log.Printf("  pod      : %s", *podURL)
+	log.Printf("  song     : %s", *songURL)
+	log.Printf("  shepherd : %s", *shepURL)
+	for _, w := range srv.Warnings() {
+		log.Printf("  warning  : %s", w)
+	}
 	if err := http.ListenAndServe(srv.Addr(), srv); err != nil {
 		log.Fatal(err)
 	}

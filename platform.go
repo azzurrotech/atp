@@ -1,14 +1,12 @@
 package atp
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"time"
-
-	"azzurrotech/shepherd/firewall"
-	"azzurrotech/shepherd/token"
 )
 
 // servePlatform dispatches the platform-manager paths owned by atp.
@@ -214,46 +212,44 @@ func (s *Server) serveHeaders(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- capability functions (registered under /api/… ) ---
+// --- platform surface ---
 
-// issueRequest is the wire form of a capability request.
-type issueRequest struct {
-	Subject    string            `json:"subject"`
-	Scopes     []string          `json:"scopes"`
-	Roles      []string          `json:"roles"`
-	Audience   string            `json:"audience"`
-	TTLSeconds int               `json:"ttl_seconds"`
-	Block      string            `json:"block"`
-	Magic      bool              `json:"magic"`
-	Next       string            `json:"next"`
-	Meta       map[string]string `json:"meta"`
+// shepherdRoutes are the shepherd endpoints atp fronts. Registering each one
+// keeps /api/functions an honest inventory of what this deployment serves, and
+// lets an operator switch an individual platform endpoint off.
+var shepherdRoutes = []struct{ method, pattern string }{
+	{"POST", "/api/keys"},
+	{"POST", "/api/keys/block"},
+	{"POST", "/api/keys/magic"},
+	{"GET", "/api/keys/javascript"},
+	{"POST", "/api/keys/regenerate"},
+	{"POST", "/api/token/verify"},
+	{"POST", "/api/revoke"},
+	{"POST", "/api/revoke/block"},
+	{"POST", "/api/provider/authenticate"},
+	{"GET", "/api/firewall/rules"},
+	{"POST", "/api/firewall/rules"},
+	{"DELETE", "/api/firewall/rules"},
+	{"DELETE", "/api/firewall/rules/{id}"},
+	{"GET", "/api/ratelimit/status"},
+	{"POST", "/api/ratelimit/reset"},
+	{"GET", "/api/upstreams"},
+	{"POST", "/api/upstreams"},
+	{"DELETE", "/api/upstreams/{prefix}"},
+	{"GET", "/api/track/{token}"},
+	{"GET", "/verify"},
 }
 
-func (ir issueRequest) options() token.IssueOptions {
-	o := token.IssueOptions{
-		Subject:  ir.Subject,
-		Scopes:   ir.Scopes,
-		Roles:    ir.Roles,
-		Audience: ir.Audience,
-		Block:    ir.Block,
-		Magic:    ir.Magic,
-		Next:     ir.Next,
-		Meta:     ir.Meta,
-	}
-	if ir.TTLSeconds > 0 {
-		o.TTL = time.Duration(ir.TTLSeconds) * time.Second
-	}
-	return o
-}
-
-func (s *Server) registerCapabilityFunctions() {
+// registerPlatformFunctions wires atp's own JSON endpoints and the shepherd
+// routes it forwards.
+func (s *Server) registerPlatformFunctions() {
 	must := func(err error) {
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	// registry surface
+	// registry surface (atp-local)
 	must(s.Handle("GET", "/api/functions", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"functions": nonNil(s.registry.Routes())})
 	}))
@@ -273,208 +269,37 @@ func (s *Server) registerCapabilityFunctions() {
 		writeJSON(w, http.StatusOK, map[string]any{"updated": s.registry.SetEnabled(body.Method, body.Pattern, on)})
 	}))
 
-	// capability token issuance
-	must(s.Handle("POST", "/api/keys", func(w http.ResponseWriter, r *http.Request) {
-		var ir issueRequest
-		if !readJSON(w, r, &ir) {
-			return
-		}
-		raw, claims, err := s.shepherd.Issue(ir.options())
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"token": raw, "claims": claims})
-	}))
-	must(s.Handle("POST", "/api/keys/block", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			issueRequest
-			BlockID string `json:"block_id"`
-			Count   int    `json:"count"`
-		}
-		if !readJSON(w, r, &body) {
-			return
-		}
-		keys, err := s.shepherd.Manager().IssueBlock(body.issueRequest.options(), body.BlockID, body.Count)
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
-	}))
-	must(s.Handle("POST", "/api/keys/magic", func(w http.ResponseWriter, r *http.Request) {
-		var ir issueRequest
-		if !readJSON(w, r, &ir) {
-			return
-		}
-		ir.Magic = true
-		raw, claims, err := s.shepherd.Manager().IssueMagicLink(ir.options())
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"token": raw, "claims": claims})
-	}))
-	must(s.Handle("GET", "/api/keys/javascript", func(w http.ResponseWriter, r *http.Request) {
-		scope := r.URL.Query().Get("scope")
-		usage := r.URL.Query().Get("usage")
-		if usage == "" {
-			usage = "encrypt"
-		}
-		key, err := s.shepherd.JSCryptoKey(scope, usage)
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, key)
-	}))
-
-	// verification + revocation
-	must(s.Handle("POST", "/api/token/verify", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Token string `json:"token"`
-			Magic bool   `json:"magic"`
-		}
-		if !readJSON(w, r, &body) {
-			return
-		}
-		var (
-			claims token.Claims
-			err    error
-		)
-		if body.Magic {
-			claims, err = s.shepherd.VerifyMagicToken(body.Token)
-		} else {
-			claims, err = s.shepherd.Manager().Verify(body.Token)
-		}
-		if err != nil {
-			writeErr(w, http.StatusUnauthorized, err.Error())
-			return
-		}
-		// A revoked token still has a valid signature, so verification has to
-		// consult the revocation list too. Without this the endpoint would
-		// confirm a token the operator has explicitly cancelled — shepherd's
-		// own verify endpoint checks this, and atp must agree with it.
-		if s.shepherd.IsDenied(claims.ID) || (claims.Block != "" && s.shepherd.IsDenied(claims.Block)) {
-			writeErr(w, http.StatusUnauthorized, "token revoked")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"valid": true, "claims": claims})
-	}))
-	must(s.Handle("POST", "/api/revoke", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			JTI       string `json:"jti"`
-			ExpiresAt int64  `json:"expires_at"`
-		}
-		if !readJSON(w, r, &body) {
-			return
-		}
-		s.shepherd.RevokeToken(body.JTI, body.ExpiresAt)
-		writeJSON(w, http.StatusOK, map[string]any{"revoked": body.JTI})
-	}))
-	must(s.Handle("POST", "/api/revoke/block", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Block     string `json:"block"`
-			ExpiresAt int64  `json:"expires_at"`
-		}
-		if !readJSON(w, r, &body) {
-			return
-		}
-		s.shepherd.RevokeBlock(body.Block, body.ExpiresAt)
-		writeJSON(w, http.StatusOK, map[string]any{"revoked_block": body.Block})
-	}))
-
-	// identity-free provider
-	must(s.Handle("POST", "/api/provider/authenticate", func(w http.ResponseWriter, r *http.Request) {
-		principal, err := s.shepherd.Provider().Authenticate(r)
-		if err != nil {
-			writeErr(w, http.StatusUnauthorized, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"principal": principal})
-	}))
-
-	// firewall
-	must(s.Handle("GET", "/api/firewall/rules", func(w http.ResponseWriter, r *http.Request) {
+	// orchestration surface (atp-local)
+	must(s.Handle("GET", "/api/platform", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"default_allow": s.firewall.DefaultAllow(),
-			"rules":         nonNil(s.firewall.Rules()),
+			"service":  "atp",
+			"version":  Version,
+			"root":     s.root,
+			"addr":     s.addr,
+			"services": s.Services(),
+			"upstreams": nonNil(s.opts.Upstreams),
+			"warnings": nonNil(s.Warnings()),
 		})
 	}))
-	must(s.Handle("POST", "/api/firewall/rules", func(w http.ResponseWriter, r *http.Request) {
-		var rule firewallRule
-		if !readJSON(w, r, &rule) {
-			return
-		}
-		id, err := s.firewall.Add(rule.toFirewall())
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": id})
+	must(s.Handle("GET", "/api/services", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		writeJSON(w, http.StatusOK, map[string]any{"services": s.ProbeServices(ctx)})
 	}))
-	must(s.Handle("DELETE", "/api/firewall/rules", func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Query().Get("id")
-		if id == "" {
-			var body struct {
-				ID string `json:"id"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			id = body.ID
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"removed": s.firewall.Remove(id)})
+	must(s.Handle("GET", "/api/static", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"static": nonNil(s.box.List())})
+	}))
+	must(s.Handle("GET", "/api/apps", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"apps": nonNil(s.apps.List())})
 	}))
 
-	// rate limiting
-	must(s.Handle("GET", "/api/ratelimit/status", func(w http.ResponseWriter, r *http.Request) {
-		key := r.URL.Query().Get("key")
-		if key == "" {
-			key = s.shepherd.ClientIP(r)
-		}
-		status, ok := s.shepherd.RateLimitStatus(key)
-		if !ok {
-			writeJSON(w, http.StatusOK, map[string]any{"key": key, "limited": false})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"key": key, "limited": true, "status": status})
-	}))
-	must(s.Handle("POST", "/api/ratelimit/reset", func(w http.ResponseWriter, r *http.Request) {
-		s.shepherd.RateLimitReset()
-		writeJSON(w, http.StatusOK, map[string]any{"reset": true})
-	}))
-
-	// gateway upstreams
-	must(s.Handle("GET", "/api/upstreams", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"mount": "/gw/", "upstreams": nonNil(s.opts.Upstreams)})
-	}))
-}
-
-// firewallRule is the wire form of a firewall rule.
-type firewallRule struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	Action   string            `json:"action"`
-	Enabled  *bool             `json:"enabled"`
-	Methods  []string          `json:"methods"`
-	PathGlob string            `json:"path_glob"`
-	Sources  []string          `json:"sources"`
-	Headers  map[string]string `json:"headers"`
-}
-
-func (f firewallRule) toFirewall() firewall.Rule {
-	enabled := true
-	if f.Enabled != nil {
-		enabled = *f.Enabled
+	// shepherd surface: a transparent proxy, with the admin token attached so
+	// a browser never needs to hold it.
+	shep := func(w http.ResponseWriter, r *http.Request) {
+		s.shepherdProxy.ServeHTTP(w, r)
 	}
-	return firewall.Rule{
-		ID:       f.ID,
-		Name:     f.Name,
-		Action:   f.Action,
-		Enabled:  enabled,
-		Methods:  f.Methods,
-		PathGlob: f.PathGlob,
-		Sources:  f.Sources,
-		Headers:  f.Headers,
+	for _, rt := range shepherdRoutes {
+		must(s.Handle(rt.method, rt.pattern, shep))
 	}
 }
 

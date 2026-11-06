@@ -6,22 +6,14 @@ import (
 	"testing"
 )
 
-func newHealthServer(t *testing.T) *Server {
+func newHealthEnv(t *testing.T) *testEnv {
 	t.Helper()
-	srv, err := New(Options{
-		Root:   t.TempDir(),
-		Secret: "a-platform-health-test-secret-32b",
-		Title:  "health probe",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return srv
+	return newEnv(t, Options{Title: "health probe"})
 }
 
-func TestHealthReportsMountedModules(t *testing.T) {
-	srv := newHealthServer(t)
-	r := srv.Health()
+func TestHealthReportsConfiguredServices(t *testing.T) {
+	env := newHealthEnv(t)
+	r := env.Server.Health()
 	if !r.OK() {
 		t.Fatalf("health = %s, failures = %v", r.Status, r.Failures)
 	}
@@ -41,22 +33,25 @@ func TestHealthReportsMountedModules(t *testing.T) {
 }
 
 func TestCheckProbesAndCleansUp(t *testing.T) {
-	srv := newHealthServer(t)
-	r := srv.Check()
+	env := newHealthEnv(t)
+	r := env.Server.Check()
 	if !r.OK() {
 		t.Fatalf("check = %s, failures = %v", r.Status, r.Failures)
 	}
 	if len(r.Components) != 6 {
 		t.Errorf("components = %d, want 6", len(r.Components))
 	}
-	// the probe record and secret must not survive the check
-	if _, err := srv.Pod().Get(ProbeTable, ProbeRecord); err == nil {
+	// the probe record must not survive the check
+	env.pod.mu.Lock()
+	_, left := env.pod.records[ProbeTable][ProbeRecord]
+	env.pod.mu.Unlock()
+	if left {
 		t.Error("probe record was left behind")
 	}
-	if _, ok := srv.Secrets().Get(ProbeApp, ProbeSecret); ok {
+	if _, ok := env.Server.Secrets().Get(ProbeApp, ProbeSecret); ok {
 		t.Error("probe secret was left behind")
 	}
-	entries, err := os.ReadDir(srv.Root())
+	entries, err := os.ReadDir(env.Server.Root())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +61,26 @@ func TestCheckProbesAndCleansUp(t *testing.T) {
 			// non-empty one would mean the probe secret survived.
 			t.Logf("probe app file present: %s", e.Name())
 		}
+	}
+}
+
+// TestCheckReportsUnreachableService proves Check turns a stopped service into
+// a degraded report rather than an error or a panic.
+func TestCheckReportsUnreachableService(t *testing.T) {
+	env := newHealthEnv(t)
+	env.song.Close()
+	r := env.Server.Check()
+	if r.OK() {
+		t.Fatal("a report with an unreachable song must not be healthy")
+	}
+	found := false
+	for _, f := range r.Failures {
+		if strings.HasPrefix(f, "song:") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("failures = %v", r.Failures)
 	}
 }
 

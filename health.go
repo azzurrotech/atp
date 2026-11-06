@@ -1,26 +1,31 @@
 package atp
 
-// Health reports the state of the platform and of the modules it mounts. It is
-// the one implementation of "is this deployment wired correctly?" that every
-// atp application can call instead of repeating the same nil checks and probes.
+// Health reports the state of the platform and of the services it fronts. It is
+// the one implementation of "is this deployment wired correctly?" that every atp
+// application can call instead of repeating the same probes.
 //
 // Two levels are offered deliberately:
 //
-//   - Health is a cheap, read-only answer: which module accessors are mounted.
-//     It is what a status page can poll as often as it likes.
-//   - Check additionally exercises each module with a real operation (a pod
-//     write/read/delete, a shepherd issue/verify, a vault set/get/delete, a
-//     registry listing). It answers "is it actually working?", not just
-//     "is it configured?", and leaves no probe data behind.
+//   - Health is a cheap, read-only answer: atp's own surfaces plus whether each
+//     service URL is configured. It is what a status page can poll as often as
+//     it likes.
+//   - Check additionally exercises each service with a real operation (a pod
+//     write/read/delete, a song silo listing, a shepherd issue/verify, a vault
+//     set/get/delete, a registry listing). It answers "is it actually working?",
+//     not just "is it configured?", and leaves no probe data behind.
 //
 // Nothing here imposes authentication or changes the access model: a host
 // chooses whether to expose the report.
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"time"
-
-	"azzurrotech/shepherd/token"
 )
 
 // Probe constants name the disposable data Check writes. They are deliberately
@@ -71,7 +76,7 @@ func (r *HealthReport) finish() HealthReport {
 	return *r
 }
 
-// Health reports which platform surfaces are mounted without touching them.
+// Health reports which platform surfaces are configured without touching them.
 func (s *Server) Health() HealthReport {
 	r := HealthReport{Version: Version, Timestamp: time.Now().UTC()}
 	if s == nil {
@@ -79,15 +84,15 @@ func (s *Server) Health() HealthReport {
 		return r.finish()
 	}
 	r.add("atp", true, Version, "")
-	r.add("pod", s.podStore != nil, "store mounted", condErr(s.podStore == nil, "store is not mounted"))
-	r.add("song", s.song != nil && s.song.Store() != nil, "static host mounted", condErr(s.song == nil, "host is not mounted"))
-	r.add("shepherd", s.shepherd != nil && s.shepherd.Manager() != nil, "token manager mounted", condErr(s.shepherd == nil, "token manager is not mounted"))
+	r.add("pod", s.opts.PodURL != "", s.opts.PodURL, "")
+	r.add("song", s.opts.SongURL != "", s.opts.SongURL, "")
+	r.add("shepherd", s.opts.ShepherdURL != "", s.opts.ShepherdURL, "")
 	r.add("secrets", s.vault != nil, "vault mounted", condErr(s.vault == nil, "secrets vault is not mounted"))
 	r.add("registry", s.registry != nil, "function registry mounted", condErr(s.registry == nil, "function registry is not mounted"))
 	return r.finish()
 }
 
-// Check exercises every module with a real, self-cleaning operation.
+// Check exercises every service with a real, self-cleaning operation.
 func (s *Server) Check() HealthReport {
 	r := HealthReport{Version: Version, Timestamp: time.Now().UTC()}
 	if s == nil {
@@ -96,43 +101,34 @@ func (s *Server) Check() HealthReport {
 	}
 	r.add("atp", true, Version, "")
 
-	// pod: write, read back, delete.
-	if s.podStore == nil {
-		r.add("pod", false, "", "store is not mounted")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// pod: write, read back, delete over HTTP.
+	base := s.opts.PodURL
+	if _, err := s.doJSON(ctx, http.MethodPut, base+"/table/"+ProbeTable, map[string]string{"id": ProbeRecord, "probe": "ok"}); err != nil {
+		r.add("pod", false, "", "write: "+err.Error())
+	} else if _, err := s.doJSON(ctx, http.MethodGet, base+"/record/"+ProbeTable+"/"+ProbeRecord, nil); err != nil {
+		r.add("pod", false, "", "read: "+err.Error())
 	} else {
-		_, _, werr := s.podStore.Upsert(ProbeTable, ProbeRecord, map[string]string{"probe": "ok"})
-		if werr != nil {
-			r.add("pod", false, "", "write: "+werr.Error())
-		} else if got, rerr := s.podStore.Get(ProbeTable, ProbeRecord); rerr != nil {
-			r.add("pod", false, "", "read: "+rerr.Error())
-		} else {
-			_ = s.podStore.Delete(ProbeTable, ProbeRecord)
-			r.add("pod", got != nil, "write/read/delete", "")
-		}
+		_, derr := s.doJSON(ctx, http.MethodDelete, base+"/record/"+ProbeTable+"/"+ProbeRecord, nil)
+		r.add("pod", derr == nil, "write/read/delete", errString(derr))
 	}
 
-	// song: list the silos through the real store.
-	if s.song == nil || s.song.Store() == nil {
-		r.add("song", false, "", "static host is not mounted")
-	} else if _, err := s.song.Store().ListSilos(); err != nil {
+	// song: list the silos through its status endpoint.
+	if _, err := s.doJSON(ctx, http.MethodGet, s.opts.SongURL+"/_song/silos", nil); err != nil {
 		r.add("song", false, "", err.Error())
 	} else {
-		r.add("song", true, "static store readable", "")
+		r.add("song", true, "silo listing readable", "")
 	}
 
-	// shepherd: issue and verify a capability through its own manager.
-	if s.shepherd == nil || s.shepherd.Manager() == nil {
-		r.add("shepherd", false, "", "token manager is not mounted")
+	// shepherd: issue and verify a capability through its own API.
+	if raw, err := s.issueProbeToken(ctx); err != nil {
+		r.add("shepherd", false, "", "issue: "+err.Error())
+	} else if _, err := s.doJSON(ctx, http.MethodPost, s.opts.ShepherdURL+"/api/token/verify", map[string]any{"token": raw}); err != nil {
+		r.add("shepherd", false, "", "verify: "+err.Error())
 	} else {
-		m := s.shepherd.Manager()
-		raw, _, err := m.Issue(token.IssueOptions{Subject: "atp-health", TTL: time.Minute})
-		if err != nil {
-			r.add("shepherd", false, "", "issue: "+err.Error())
-		} else if _, err := m.Verify(raw); err != nil {
-			r.add("shepherd", false, "", "verify: "+err.Error())
-		} else {
-			r.add("shepherd", true, "issue/verify", "")
-		}
+		r.add("shepherd", true, "issue/verify", "")
 	}
 
 	// secrets: set, read back and delete a disposable entry.
@@ -160,9 +156,83 @@ func (s *Server) Check() HealthReport {
 	return r.finish()
 }
 
+// issueProbeToken asks shepherd for a one-minute capability.
+func (s *Server) issueProbeToken(ctx context.Context) (string, error) {
+	body, err := s.doJSON(ctx, http.MethodPost, s.opts.ShepherdURL+"/api/keys", map[string]any{
+		"subject": "atp-health",
+		"ttl":     "60s",
+	})
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", err
+	}
+	if payload.Token == "" {
+		return "", fmt.Errorf("shepherd returned no token")
+	}
+	return payload.Token, nil
+}
+
+// doJSON performs one JSON request against a service, attaching shepherd's
+// admin token when the target is shepherd.
+func (s *Server) doJSON(ctx context.Context, method, url string, body any) ([]byte, error) {
+	var rdr *bytes.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		rdr = bytes.NewReader(raw)
+	} else {
+		rdr = bytes.NewReader(nil)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if s.opts.ShepherdAdmin != "" && s.isShepherdURL(url) {
+		req.Header.Set("X-Shepherd-Admin", s.opts.ShepherdAdmin)
+	}
+	resp, err := s.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return raw, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	return raw, nil
+}
+
+func (s *Server) isShepherdURL(url string) bool {
+	return s.opts.ShepherdURL != "" && strings.HasPrefix(url, s.opts.ShepherdURL)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 func condErr(cond bool, msg string) string {
 	if cond {
 		return msg
 	}
 	return ""
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

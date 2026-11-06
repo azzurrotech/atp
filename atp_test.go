@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +16,19 @@ import (
 
 const testSecret = "0123456789abcdef0123456789abcdef" // 32 bytes
 
-func newServer(t *testing.T, opts Options) *Server {
+// testEnv bundles a server with the fake services it fronts, so a test can
+// assert both the response and what was forwarded.
+type testEnv struct {
+	*Server
+	pod      *fakePod
+	song     *fakeSong
+	shepherd *fakeShepherd
+}
+
+// newEnv builds a server wired to in-process fakes for pod, song and shepherd.
+// Passing a non-empty service URL opts that service out (a test can point at a
+// deliberately dead address instead).
+func newEnv(t *testing.T, opts Options) *testEnv {
 	t.Helper()
 	if opts.Root == "" {
 		opts.Root = t.TempDir()
@@ -25,13 +36,34 @@ func newServer(t *testing.T, opts Options) *Server {
 	if opts.Secret == "" {
 		opts.Secret = testSecret
 	}
+	env := &testEnv{}
+	if opts.PodURL == "" {
+		env.pod = newFakePod(t)
+		opts.PodURL = env.pod.URL
+	}
+	if opts.SongURL == "" {
+		env.song = newFakeSong(t, filepath.Join(opts.Root, "apps"))
+		opts.SongURL = env.song.URL
+	}
+	if opts.ShepherdURL == "" {
+		env.shepherd = newFakeShepherd(t)
+		opts.ShepherdURL = env.shepherd.URL
+	}
+	if opts.ShepherdAdmin == "" {
+		opts.ShepherdAdmin = testAdminToken
+	}
 	srv, err := New(opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
-	return srv
+	env.Server = srv
+	return env
 }
+
+const testAdminToken = "test-admin-token"
+
+func newServer(t *testing.T, opts Options) *Server { return newEnv(t, opts).Server }
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
@@ -520,69 +552,49 @@ func TestManagementView(t *testing.T) {
 	}
 }
 
+// TestPlatformCapabilityFunctions proves atp fronts shepherd's capability API
+// over HTTP: the request body reaches shepherd unchanged, the admin token is
+// attached on the way, and the answer comes back untouched. Token cryptography
+// is shepherd's own contract and is tested in that module.
 func TestPlatformCapabilityFunctions(t *testing.T) {
-	srv := newServer(t, Options{})
+	env := newEnv(t, Options{})
+	srv := env.Server
+
 	// issue
 	rec := do(t, srv, "POST", "/api/keys",
-		strings.NewReader(`{"subject":"user@example","scopes":["read:orders"],"ttl_seconds":3600}`), nil)
-	if rec.Code != http.StatusOK {
+		strings.NewReader(`{"subject":"user@example","scopes":["read:orders"],"ttl":"1h"}`), nil)
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("issue %d %q", rec.Code, rec.Body.String())
 	}
 	var issued map[string]any
 	decode(t, rec, &issued)
-	raw, _ := issued["token"].(string)
-	if raw == "" {
-		t.Fatalf("no token: %q", rec.Body.String())
+	if raw, _ := issued["token"].(string); raw != "tok-1" {
+		t.Fatalf("shepherd token not returned: %q", rec.Body.String())
 	}
+	if !env.shepherd.saw("POST /api/keys") {
+		t.Fatal("issue was not forwarded to shepherd")
+	}
+	if !env.shepherd.sawAdmin(testAdminToken) {
+		t.Fatal("admin token was not attached to the forwarded request")
+	}
+
 	// verify
-	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"`+raw+`"}`), nil)
-	if rec.Code != http.StatusOK {
+	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"tok-1"}`), nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"valid": true`) {
 		t.Fatalf("verify %d %q", rec.Code, rec.Body.String())
 	}
-	// verify bad
+	// verify bad: shepherd's 401 must not be swallowed
 	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"garbage"}`), nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("bad verify should 401, got %d", rec.Code)
 	}
-	// A revoked token has a valid signature but must not verify: the endpoint
-	// has to consult the revocation list, exactly as shepherd's own does. A
-	// second, throwaway token is used so this does not disturb the one above.
-	rec = do(t, srv, "POST", "/api/keys",
-		strings.NewReader(`{"subject":"revoke-me","scopes":["read:orders"],"ttl_seconds":3600}`), nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("issue second %d %q", rec.Code, rec.Body.String())
-	}
-	var second map[string]any
-	decode(t, rec, &second)
-	doomed, _ := second["token"].(string)
-	if doomed == "" {
-		t.Fatalf("no second token: %q", rec.Body.String())
-	}
-	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"`+doomed+`"}`), nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("second verify %d %q", rec.Code, rec.Body.String())
-	}
-	var verified struct {
-		Claims struct {
-			JTI       string `json:"jti"`
-			ExpiresAt int64  `json:"exp"`
-		} `json:"claims"`
-	}
-	decode(t, rec, &verified)
-	if verified.Claims.JTI == "" {
-		t.Fatal("issued token has no jti")
-	}
-	rec = do(t, srv, "POST", "/api/revoke", strings.NewReader(
-		`{"jti":"`+verified.Claims.JTI+`","expires_at":`+strconv.FormatInt(verified.Claims.ExpiresAt, 10)+`}`), nil)
+	// revoke passes the jti form straight through
+	rec = do(t, srv, "POST", "/api/revoke", strings.NewReader(`{"jti":"jti-1","expires_at":4102444800}`), nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("revoke %d %q", rec.Code, rec.Body.String())
 	}
-	rec = do(t, srv, "POST", "/api/token/verify", strings.NewReader(`{"token":"`+doomed+`"}`), nil)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("a revoked token must not verify, got %d %q", rec.Code, rec.Body.String())
-	}
-	// provider authenticate with the token
-	rec = do(t, srv, "POST", "/api/provider/authenticate", nil, map[string]string{"Authorization": "Bearer " + raw})
+	// provider authenticate keeps the inbound Authorization header
+	rec = do(t, srv, "POST", "/api/provider/authenticate", nil, map[string]string{"Authorization": "Bearer tok-1"})
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "user@example") {
 		t.Fatalf("provider %d %q", rec.Code, rec.Body.String())
 	}
@@ -592,15 +604,19 @@ func TestPlatformCapabilityFunctions(t *testing.T) {
 		t.Fatalf("firewall list %d %q", rec.Code, rec.Body.String())
 	}
 	rec = do(t, srv, "POST", "/api/firewall/rules", strings.NewReader(`{"action":"deny","path_glob":"/blocked/**","enabled":true}`), nil)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("firewall add %d %q", rec.Code, rec.Body.String())
+	}
+	rec = do(t, srv, "DELETE", "/api/firewall/rules", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("firewall remove %d %q", rec.Code, rec.Body.String())
 	}
 	// ratelimit
 	rec = do(t, srv, "GET", "/api/ratelimit/status", nil, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ratelimit %d", rec.Code)
 	}
-	// functions listing
+	// functions listing still names the platform endpoints
 	rec = do(t, srv, "GET", "/api/functions", nil, nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "/api/keys") {
 		t.Fatalf("functions %d %q", rec.Code, rec.Body.String())
@@ -609,6 +625,24 @@ func TestPlatformCapabilityFunctions(t *testing.T) {
 	rec = do(t, srv, "GET", "/api/keys/javascript?scope=notes&usage=encrypt", nil, nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "algorithm") {
 		t.Fatalf("js key %d %q", rec.Code, rec.Body.String())
+	}
+	// the gateway proxies too
+	if rec := do(t, srv, "GET", "/gw/upstream/x", nil, nil); rec.Code != http.StatusOK {
+		t.Fatalf("gateway %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestServiceDownIsBadGateway proves a stopped service degrades cleanly instead
+// of taking the platform with it.
+func TestServiceDownIsBadGateway(t *testing.T) {
+	env := newEnv(t, Options{})
+	env.pod.Close()
+	rec := do(t, env.Server, "GET", "/pod/health", nil, nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("want 502 for a stopped pod, got %d %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unavailable") {
+		t.Fatalf("error should name the upstream: %q", rec.Body.String())
 	}
 }
 
@@ -634,11 +668,7 @@ func TestPodMounted(t *testing.T) {
 func TestMiddlewareModeDelegates(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "apps", "notes", "index.html"), "<html><head></head><body>app</body></html>")
-	srv, err := New(Options{Root: root, Secret: testSecret})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer srv.Close()
+	srv := newServer(t, Options{Root: root})
 
 	host := http.NewServeMux()
 	host.Handle("/platform/", http.StripPrefix("/platform", srv))
@@ -694,13 +724,30 @@ func TestStaticEncryptionAtRest(t *testing.T) {
 	}
 }
 
-func TestEncryptOptionOpensPod(t *testing.T) {
+func TestEncryptOptionFlag(t *testing.T) {
 	srv := newServer(t, Options{Encrypt: true})
 	if !srv.Encrypted() {
 		t.Fatal("Encrypted() false")
 	}
-	if !srv.Pod().Encrypted() {
-		t.Fatal("pod store not encrypted")
+}
+
+// TestPodProxyStripsMounts locks in the two pod entry points atp exposes: the
+// platform mount and the per-application mount both collapse to pod's own root
+// paths before forwarding.
+func TestPodProxyStripsMounts(t *testing.T) {
+	env := newEnv(t, Options{})
+	srv := env.Server
+	writeFile(t, filepath.Join(srv.Root(), "apps", "notes", "index.html"), "<html></html>")
+	_ = srv.Apps().Discover()
+
+	rec := do(t, srv, "PUT", "/pod/table/contacts",
+		strings.NewReader(`{"id":"ada","name":"Ada"}`), map[string]string{"Content-Type": "application/json"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("platform pod mount %d %q", rec.Code, rec.Body.String())
+	}
+	rec = do(t, srv, "GET", "/notes/api/pod/record/contacts/ada", nil, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Ada") {
+		t.Fatalf("per-app pod mount %d %q", rec.Code, rec.Body.String())
 	}
 }
 

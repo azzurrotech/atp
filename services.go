@@ -240,8 +240,8 @@ func (s *Server) syncUpstreams() {
 	if len(s.opts.Upstreams) == 0 {
 		return
 	}
-	if s.opts.ShepherdAdmin == "" {
-		s.warn("upstreams configured but ShepherdAdmin is empty; shepherd rejected the registration")
+	if s.shepherdAdminToken() == "" {
+		s.warn("upstreams configured but no shepherd admin token is available; shepherd rejected the registration")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -252,4 +252,3 @@ func (s *Server) syncUpstreams() {
 		}
 	}
 }
-

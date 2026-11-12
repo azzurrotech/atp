@@ -164,20 +164,23 @@ func (v *Vault) List(app string) []SecretInfo {
 	return out
 }
 
-// Delete removes a secret. It reports whether one existed.
-func (v *Vault) Delete(app, name string) bool {
+// Delete removes a secret. It reports whether one existed and whether the
+// removal reached disk.
+func (v *Vault) Delete(app, name string) (bool, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	m, err := v.loadApp(app)
 	if err != nil {
-		return false
+		return false, err
 	}
 	if _, ok := m[name]; !ok {
-		return false
+		return false, nil
 	}
 	delete(m, name)
-	_ = v.saveApp(app, m)
-	return true
+	if err := v.saveApp(app, m); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Apps lists the application namespaces that hold at least one secret.
@@ -247,16 +250,19 @@ func (v *Vault) Resolve(token string) (string, bool) {
 	return string(plain), true
 }
 
-// Revoke removes a share token early.
-func (v *Vault) Revoke(token string) bool {
+// Revoke removes a share token early. It reports whether the token existed and
+// whether the removal reached disk.
+func (v *Vault) Revoke(token string) (bool, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if _, ok := v.shares[token]; !ok {
-		return false
+		return false, nil
 	}
 	delete(v.shares, token)
-	_ = v.saveShares()
-	return true
+	if err := v.saveShares(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (v *Vault) sharesPath() string { return filepath.Join(v.dir, "_shares.json") }

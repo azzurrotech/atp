@@ -1,0 +1,36 @@
+{
+  "log_dir": "./logs",
+  "health_timeout": "20s",
+  "instances": [
+    {
+      "name": "pod",
+      "dir": "../pod",
+      "command": "./pod",
+      "args": ["-port", "8081", "-db", "../data/pod"],
+      "url": "http://127.0.0.1:8081",
+      "health": "/health",
+      "restart": true
+    },
+    {
+      "name": "song",
+      "dir": "../song",
+      "command": "./song",
+      "args": ["--port", "8082", "--root", "../data/song"],
+      "url": "http://127.0.0.1:8082",
+      "health": "/health",
+      "restart": true
+    },
+    {
+      "name": "shepherd",
+      "dir": "../shepherd",
+      "command": "./shepherd",
+      "args": ["-port", "8083"],
+      "url": "http://127.0.0.1:8083",
+      "health": "/health",
+      "restart": true,
+      "capture": {
+        "shepherd_admin": "admin token (send as X-Shepherd-Admin):"
+      }
+    }
+  ]
+}

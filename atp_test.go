@@ -63,6 +63,14 @@ func newEnv(t *testing.T, opts Options) *testEnv {
 
 const testAdminToken = "test-admin-token"
 
+// loopbackAddr is the peer the test helper presents by default. Control-plane
+// calls are loopback-only when no admin token is configured, and httptest's
+// default peer is a non-loopback documentation address.
+const loopbackAddr = "127.0.0.1:54321"
+
+// remoteAddr is a non-loopback peer, used by the control-plane policy tests.
+const remoteAddr = "203.0.113.9:54321"
+
 func newServer(t *testing.T, opts Options) *Server { return newEnv(t, opts).Server }
 
 func writeFile(t *testing.T, path, content string) {
@@ -78,6 +86,10 @@ func writeFile(t *testing.T, path, content string) {
 func do(t *testing.T, h http.Handler, method, target string, body io.Reader, hdrs map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, body)
+	// httptest.NewRequest defaults RemoteAddr to 192.0.2.1:1234 (a documentation
+	// address, not loopback). atp's control plane is loopback-only unless
+	// ATP_ADMIN_TOKEN is set, so the default would make every control call 403.
+	req.RemoteAddr = loopbackAddr
 	for k, v := range hdrs {
 		req.Header.Set(k, v)
 	}
@@ -313,8 +325,8 @@ func TestVaultCRUDAndEncryptionAtRest(t *testing.T) {
 	if bytes.Contains(data, []byte("sk_live_secret_value")) {
 		t.Fatal("secret stored in plaintext on disk")
 	}
-	if !v.Delete("notes", "stripe_key") {
-		t.Fatal("Delete returned false")
+	if ok, err := v.Delete("notes", "stripe_key"); err != nil || !ok {
+		t.Fatalf("Delete = %v, %v", ok, err)
 	}
 	if _, ok := v.Get("notes", "stripe_key"); ok {
 		t.Fatal("secret still present after delete")
@@ -335,8 +347,8 @@ func TestVaultShare(t *testing.T) {
 	if got, ok := v.Resolve(tok); !ok || got != "value-123" {
 		t.Fatalf("Resolve = %q ok=%v", got, ok)
 	}
-	if !v.Revoke(tok) {
-		t.Fatal("Revoke false")
+	if ok, err := v.Revoke(tok); err != nil || !ok {
+		t.Fatalf("Revoke = %v, %v", ok, err)
 	}
 	if _, ok := v.Resolve(tok); ok {
 		t.Fatal("token usable after revoke")

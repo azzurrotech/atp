@@ -12,6 +12,9 @@ atp.exe
 /atp
 atp-executable
 atp-server
+/atp_new
+/atp_orig
+*.bak
 
 # Test binary, built with `go test -c`
 *.test

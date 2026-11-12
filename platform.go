@@ -83,7 +83,12 @@ func (s *Server) serveSecrets(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"app": app, "name": name, "stored": true})
 		case http.MethodDelete:
-			if !s.vault.Delete(app, name) {
+			deleted, err := s.vault.Delete(app, name)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "delete secret: "+err.Error())
+				return
+			}
+			if !deleted {
 				writeErr(w, http.StatusNotFound, "secret not found")
 				return
 			}
@@ -123,7 +128,12 @@ func (s *Server) serveSecrets(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"app": app, "name": name, "value": value})
 		case http.MethodDelete:
-			if !s.vault.Revoke(tok) {
+			revoked, err := s.vault.Revoke(tok)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "revoke share: "+err.Error())
+				return
+			}
+			if !revoked {
 				writeErr(w, http.StatusNotFound, "share not found")
 				return
 			}
@@ -272,20 +282,37 @@ func (s *Server) registerPlatformFunctions() {
 	// orchestration surface (atp-local)
 	must(s.Handle("GET", "/api/platform", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"service":  "atp",
-			"version":  Version,
-			"root":     s.root,
-			"addr":     s.addr,
-			"services": s.Services(),
-			"upstreams": nonNil(s.opts.Upstreams),
-			"warnings": nonNil(s.Warnings()),
+			"service":    "atp",
+			"version":    Version,
+			"root":       s.root,
+			"addr":       s.addr,
+			"services":   s.Services(),
+			"upstreams":  nonNil(s.opts.Upstreams),
+			"warnings":   nonNil(s.Warnings()),
+			"supervised": s.supervise,
 		})
+	}))
+	health := func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.Health())
+	}
+	must(s.Handle("GET", "/api/health", health))
+	must(s.Handle("GET", "/health", health))
+	must(s.Handle("GET", "/api/health/check", func(w http.ResponseWriter, r *http.Request) {
+		report := s.Check()
+		status := http.StatusOK
+		if !report.OK() {
+			status = http.StatusServiceUnavailable
+		}
+		writeJSON(w, status, report)
 	}))
 	must(s.Handle("GET", "/api/services", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		writeJSON(w, http.StatusOK, map[string]any{"services": s.ProbeServices(ctx)})
 	}))
+	must(s.Handle("GET", "/api/instances", s.serveInstances))
+	must(s.Handle("GET", "/api/instances/{name}", s.serveInstance))
+	must(s.Handle("POST", "/api/instances/{name}", s.serveInstanceAction))
 	must(s.Handle("GET", "/api/static", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"static": nonNil(s.box.List())})
 	}))
@@ -293,13 +320,22 @@ func (s *Server) registerPlatformFunctions() {
 		writeJSON(w, http.StatusOK, map[string]any{"apps": nonNil(s.apps.List())})
 	}))
 
-	// shepherd surface: a transparent proxy, with the admin token attached so
-	// a browser never needs to hold it.
+	// shepherd surface: a transparent proxy. atp attaches the admin token it
+	// knows (configured or captured from a managed shepherd), so a browser
+	// never needs to hold it — but the management routes are still gated by
+	// the control-plane policy, so "atp can see the token" does not mean
+	// "everyone who can reach atp is shepherd admin".
 	shep := func(w http.ResponseWriter, r *http.Request) {
 		s.shepherdProxy.ServeHTTP(w, r)
 	}
 	for _, rt := range shepherdRoutes {
-		must(s.Handle(rt.method, rt.pattern, shep))
+		method, pattern := rt.method, rt.pattern
+		must(s.Handle(method, pattern, func(w http.ResponseWriter, r *http.Request) {
+			if shepherdRouteNeedsAdmin(pattern) && !s.authorizeControl(w, r) {
+				return
+			}
+			shep(w, r)
+		}))
 	}
 }
 

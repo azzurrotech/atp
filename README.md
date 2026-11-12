@@ -593,7 +593,7 @@ Every atp application can answer "is this deployment wired correctly?" with the 
 calls, rather than repeating nil checks and probes:
 
 ```go
-report := srv.Health() // cheap: which modules are mounted
+report := srv.Health() // cheap: each configured service accepts a TCP connection
 report = srv.Check()   // live: exercise each module, clean up after itself
 ```
 
@@ -614,6 +614,11 @@ disposable pod record (`__atp_health`), lists song's silos, issues and verifies 
 shepherd token, sets and deletes a disposable vault secret (`__atp_health`), and lists the
 function registry. Nothing it writes survives the call. A host chooses whether to expose the
 report; atp adds no authentication to it.
+
+Both reports are served as JSON at `GET /api/health` (and the `GET /health` alias), while
+`GET /api/health/check` runs `Check` and answers `503` when anything is degraded. Every BLUE
+service exposes the same pair of paths, so a discovery probe or an operator can use one rule
+for all of them.
 
 This is the only definition of "degraded" in the platform, so a new module is covered
 everywhere at once instead of in each application.
@@ -668,6 +673,15 @@ go build -o atp ./cmd/atp
 | `--secret` | `ATP_SECRET` | — | master secret ≥ 32 bytes (vault key + token signing) |
 | `--encrypt` | `ATP_ENCRYPT` | `false` | encrypt static and dynamic content at rest |
 | `--headless` | `ATP_HEADLESS` | `false` | serve apps/functions without the management view |
+| `--pod-url` | `ATP_POD_URL` | `http://127.0.0.1:8081` | base URL of the pod service |
+| `--song-url` | `ATP_SONG_URL` | `http://127.0.0.1:8082` | base URL of the song service |
+| `--shepherd-url` | `ATP_SHEPHERD_URL` | `http://127.0.0.1:8083` | base URL of the shepherd service |
+| `--shepherd-admin` | `ATP_SHEPHERD_ADMIN` | — | shepherd admin token, or capture it from a supervised instance |
+| `--discover` | `ATP_DISCOVER` | `false` | scan localhost and register discovered apps |
+| `--ports` | `ATP_PORTS` | — | comma-separated ports for discovery (defaults to 8080-8083, 9080, 9090) |
+| `--manifest` | `ATP_MANIFEST` | `./platform.json` when present | instance manifest for supervising pod/song/shepherd |
+| `--supervise` | `ATP_SUPERVISE` | `false` | start every manifest instance at startup and stop it on shutdown |
+| `--log-dir` | `ATP_LOG_DIR` | manifest's `log_dir` | override the instance log directory |
 | `--version` / `--help` | — | — | print and exit |
 
 Try a whole application locally:
@@ -676,6 +690,27 @@ Try a whole application locally:
 ./atp --root ./data --secret "$(head -c32 /dev/urandom | base64)" --encrypt
 # drop HTML/CSS/JS in ./data/apps/notes/, register a Go function, open /notes/
 ```
+
+### Supervising pod, song and shepherd
+
+atp can own the lifecycle of the services it fronts. Point it at a JSON manifest and pass
+`--supervise`; `platform.example.json` is a working sibling-checkout example:
+
+```sh
+go build -o atp ./cmd/atp
+(cd ../pod && go build -o pod ./cmd/pod)
+(cd ../song && go build -o song .)
+(cd ../shepherd && go build -o shepherd .)
+./atp --secret "$(head -c32 /dev/urandom | base64)" \
+      --manifest platform.example.json --supervise
+```
+
+The manifest names each instance's working directory, command, arguments, URL and health
+path. Relative paths resolve against the manifest, so it can live beside the projects it
+launches. Instances start after atp's listener is accepting connections and stop in reverse
+order on `SIGINT`/`SIGTERM`. A shepherd instance needs no duplicated secret: its `capture`
+map tells atp to read the admin token from shepherd's startup banner, and atp then uses it for
+the upstream management calls. `GET /api/instances` reports the live state.
 
 ---
 

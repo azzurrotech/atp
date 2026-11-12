@@ -13,12 +13,14 @@
 package atp
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Version is the atp release string.
@@ -71,13 +73,30 @@ type Options struct {
 	// ShepherdURL is the base URL of a running shepherd server. Default
 	// DefaultShepherdURL (http://127.0.0.1:8083).
 	ShepherdURL string
-	// ShepherdAdmin is shepherd's admin token. When set, atp attaches it as
-	// X-Shepherd-Admin to proxied requests, so a browser can use /api/keys
-	// without ever seeing the token.
+	// ShepherdAdmin is shepherd's admin token. When empty, atp uses the token
+	// it captured from a managed shepherd instance's log (see Manifest).
 	ShepherdAdmin string
 	// HTTPClient is used for service probes and startup registration. Nil
 	// means a 10-second default client.
 	HTTPClient *http.Client
+
+	// Manifest is the path to an instance manifest (JSON). When empty, atp
+	// loads "./platform.json" if that file exists; otherwise it manages no
+	// instances and /api/instances reports an empty list.
+	Manifest string
+	// LogDir overrides the manifest's log directory. The default is the
+	// manifest's own "logs" directory.
+	LogDir string
+	// Supervise asks atp to start every manifest instance at startup and to
+	// stop the ones it started on shutdown. Starting instances is always
+	// available through /api/instances; Supervise only controls startup.
+	Supervise bool
+	// HealthTimeout overrides the manifest's health_timeout.
+	HealthTimeout time.Duration
+	// AdminToken protects instance control (and, when set, shepherd's
+	// management routes) with an X-ATP-Admin header. When empty, control is
+	// restricted to loopback clients.
+	AdminToken string
 }
 
 // Server is the atp platform. It is an http.Handler; a host application can
@@ -104,6 +123,9 @@ type Server struct {
 
 	silos     siloCache
 	encrypted bool
+
+	instances *Supervisor
+	supervise bool
 
 	warnMu   sync.Mutex
 	warnings []string
@@ -165,8 +187,8 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 	shepMutate := func(req *http.Request) {
-		if o.ShepherdAdmin != "" {
-			req.Header.Set("X-Shepherd-Admin", o.ShepherdAdmin)
+		if tok := s.shepherdAdminToken(); tok != "" {
+			req.Header.Set("X-Shepherd-Admin", tok)
 		}
 		if o.ClientIPHeader != "" {
 			req.Header.Set("X-Forwarded-For", req.Header.Get(o.ClientIPHeader))
@@ -176,6 +198,11 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 
+	if err := s.loadInstances(o); err != nil {
+		return nil, err
+	}
+	s.supervise = o.Supervise
+
 	if err := s.apps.Discover(); err != nil {
 		return nil, err
 	}
@@ -183,6 +210,76 @@ func New(o Options) (*Server, error) {
 	s.syncUpstreams()
 	s.handler = s.wrap(s.core(http.FileServer(http.Dir(root)), true), true)
 	return s, nil
+}
+
+// loadInstances reads the manifest atp was pointed at. An empty Manifest option
+// means "use ./platform.json when it exists", which makes an atp checked out in
+// a stack directory manage that stack without extra flags.
+func (s *Server) loadInstances(o Options) error {
+	path := o.Manifest
+	if path == "" {
+		if _, err := os.Stat("platform.json"); err == nil {
+			path = "platform.json"
+		}
+	}
+	if path == "" {
+		return nil
+	}
+	sup, err := LoadManifest(path)
+	if err != nil {
+		return err
+	}
+	if o.LogDir != "" {
+		if err := os.MkdirAll(o.LogDir, 0o755); err != nil {
+			return err
+		}
+		sup.logDir = o.LogDir
+	}
+	if o.HealthTimeout > 0 {
+		sup.timeout = o.HealthTimeout
+	}
+	if o.AdminToken == "" {
+		s.warn("instance control is loopback-only; set ATP_ADMIN_TOKEN to manage it remotely")
+	}
+	s.instances = sup
+	return nil
+}
+
+// Instances returns the supervisor, or nil when atp was not given a manifest.
+func (s *Server) Instances() *Supervisor { return s.instances }
+
+// StartAll starts every manifest instance in order. It is what --supervise
+// calls once the listener is accepting connections.
+func (s *Server) StartAll(ctx context.Context) map[string]error {
+	if s.instances == nil {
+		return map[string]error{}
+	}
+	errs := s.instances.StartAll(ctx)
+	// A managed shepherd publishes its admin token in its startup banner, so
+	// the upstream registration that failed during New can be retried now.
+	s.syncUpstreams()
+	return errs
+}
+
+// StopAll stops every instance atp started, in reverse order.
+func (s *Server) StopAll(ctx context.Context) map[string]error {
+	if s.instances == nil {
+		return map[string]error{}
+	}
+	return s.instances.StopAll(ctx)
+}
+
+// shepherdAdminToken prefers the configured token and falls back to the one atp
+// captured from a managed shepherd's startup banner. This is why a manifest
+// does not need to contain a second copy of shepherd's secret.
+func (s *Server) shepherdAdminToken() string {
+	if s.opts.ShepherdAdmin != "" {
+		return s.opts.ShepherdAdmin
+	}
+	if s.instances != nil {
+		return s.instances.Captured("shepherd_admin")
+	}
+	return ""
 }
 
 // podStrip removes the atp-side prefix before forwarding to pod. The pod
@@ -349,10 +446,14 @@ func (s *Server) HandleFunc(method, pattern string, fn http.HandlerFunc) error {
 	return s.registry.add(method, pattern, "", fn)
 }
 
-// Close releases the server's resources. atp holds no background goroutines or
-// long-lived handles beyond the filesystem and the shared HTTP client, so it is
-// a no-op kept for symmetry.
-func (s *Server) Close() error { return nil }
+// Close stops every instance atp started and releases the server. Adopted
+// (externally started) instances are left running. It is idempotent.
+func (s *Server) Close() error {
+	if s.instances != nil {
+		return s.instances.Close()
+	}
+	return nil
+}
 
 // ext returns the lowercase file extension of a path, including the dot.
 func ext(p string) string {
